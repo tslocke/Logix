@@ -1,0 +1,367 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# {{{ init
+setlang logix.stdlang
+
+import re
+import itertools
+import new
+import types
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+    def debugmode x:
+
+limport ltest.testlang
+setlang testlang.testlang
+
+import devlogix
+from devlogix import rootops, language, parser, data
+# }}}
+
+defsuite main:
+
+    debugmode 0
+
+    if not hasattr devlogix 'baselang':
+        devlogix.init()
+
+    stdlang = devlogix.imp "devlogix.std" .std.__impl__
+
+    devlogix.clearCaches()
+
+    stdenv = dict itertools=itertools
+
+    # {{{ def lxeval src env=None:
+    def lxeval src env=None:
+        env = if env is None: stdenv else: env
+        env/__name__ = '__main__'
+        code = stdlang.parse src mode='exec' execenv=env
+        language.eval code/0 env
+    # }}}
+
+    # {{{ def lxexec src env=None:
+    def lxexec src env=None:
+        env = if env is None: stdenv else: env
+
+        if "__name__" not in env:
+            env/__name__ = "TESTMODULE"
+        stdlang.parse src mode='exec' execenv=env
+    # }}}
+
+    # {{{ deftest doubleQuote:
+    deftest doubleQuote:
+        lxeval '"a"' ?= 'a'
+        lxeval r'"a\nb"' ?= 'a\nb'
+
+        stdenv/x = 10
+        lxeval '"a $x b"' ?= 'a 10 b'
+
+        lxeval '"a $(1 + 2) b"' ?= 'a 3 b'
+
+        stdenv/x = range 3
+        lxeval '"a $[x|=] b"' ?= 'a 0=1=2 b'
+    # }}}
+    
+    # {{{ deftest zeroArgCall:
+    deftest zeroArgCall:
+        lxeval "f()" (dict f={|10}) ?= 10
+        
+        class C:
+            def test self:
+                10
+
+        lxeval "c.test()" (dict c=C()) ?= 10
+    # }}}
+
+    # {{{ deftest varargs:
+    deftest varargs:
+        env = [:]
+        lxexec """
+            def run x y *args **kws:
+                x, y, args, kws
+            """ env
+        env/run 1 2 3 4 a=5 b=6  ?=  1, 2, (3,4), (dict a=5 b=6)
+
+        def f *args **kws:
+            return args, kws
+
+        env = dict f=f l=[1,2,3] kw=['a':1, 'b':2]
+        lxeval "f *:l" env ?= (1, 2, 3), [:]
+        lxeval "f **:kw" env ?= tuple(), ['a':1, 'b':2]
+        lxeval "f *:l **:kw" env ?= (1, 2, 3), ['a':1, 'b':2]
+        lxeval "f 10 11 **:kw" env ?= (10, 11), ['a':1, 'b':2]
+        lxeval "f 10 11 *:l " env ?= (10, 11, 1, 2, 3), [:]
+        lxeval "f 10 11 *:l **:kw" env ?= (10, 11, 1, 2, 3), ['a':1, 'b':2]
+    # }}}
+
+    # {{{ deftest keywordArgs:
+    deftest keywordArgs:
+        def f x a=1 b=2: x, a, b
+        env = dict f=f
+
+        lxeval "f 99 b=10 a=5" env ?= (99, 5, 10)
+        lxeval "f 99 b = 10 a = 5" env ?= (99, 5, 10)
+    # }}}
+            
+    # {{{ deftest lambda_:
+    deftest lambda_:
+        x = lxeval "{it*2} 4"
+        x ?= 8
+
+        lxeval "{a b|a+b} 4 5" ?= 9
+
+        # test for problems with switching tokenizer language
+        lxeval "{f(do: c)}" ?? {:types.FunctionType}
+    # }}}
+
+    # {{{ deftest map:
+    deftest map:
+        x = lxeval "[1..5] *> {it * 2}"
+        list x ?= [2,4,6,8,10]
+    # }}}
+
+    # {{{ deftest dot:
+    deftest dot:
+        x = lxeval "'x'.find"
+        x ?= 'x'.find
+
+        x = lxeval "name='find'; 'x'.(name)"
+        x ?= 'x'.find
+    # }}}
+
+    # {{{ deftest plus:
+    deftest plus:
+        lxeval "1+2" ?= 3
+        lxeval "list ([1..4] *> (+3))" ?=  [4,5,6,7]        
+    # }}}
+
+    # {{{ deftest Try:
+    deftest Try:
+        env = [:]
+        lxexec """
+            x = 2
+            try:
+              base 1 div 0
+            except:
+              x = 1
+            """ env
+        env/x ?= 1
+    # }}}
+
+    # {{{ deftest do_:
+    deftest do_:
+        lxeval "do: 1" ?= 1
+    # }}}
+
+    # {{{ defgroup argPreconditions:
+    defgroup argPreconditions:
+
+        # {{{ deftest basics:
+        deftest basics:
+            f = lxeval "{a(int)|a+1}"
+            f 1 ?= 2
+            f 'a' ?raises {:devlogix.ArgPreconditionError}
+
+            f = lxeval """
+                do:
+                    def inrange a b: {it >= a and it <= b}
+                    {a(int) b(inrange 5 10)|a+b}
+                """
+            f 5 7 ?= 12
+            f 5 4 ?raises {:devlogix.ArgPreconditionError}
+        # }}}
+
+        deftest predLang:
+            f = lxeval "{a(int?)|a}"
+            f 1 ?= 1
+            f None ?= None
+            f 'a' ?raises {:devlogix.ArgPreconditionError}
+    # }}}
+
+    # {{{ deftest staticmethod:
+    deftest staticmethod:
+        lxeval """
+            class X:
+                def static f a: a
+            """
+        stdenv/X.f ?? {:types.FunctionType}
+    # }}}
+        
+    # {{{ deftest deflangError:
+    deftest deflangError:
+        lxeval """
+            deflang foo:
+                setlang foo
+                a.b
+            """ stdenv ?raises {:SyntaxError msg=/unrecognized symbol/}
+    # }}}
+
+    # {{{ deftest gensyms_:
+    deftest gensyms_:
+        lxexec "gensyms a b"
+        stdenv/a ?? {:devlogix.Symbol}
+        stdenv/b ?? {:devlogix.Symbol}
+    # }}}
+
+    # {{{ deftest valfor_:
+    deftest valfor_:
+        lxexec """
+            x = valfor i in [1..10]:
+                    if i > 3:
+                        breakwith i * 100
+                else:
+                    99
+            """
+        stdenv/x ?= 400
+
+        lxexec """
+            x = valfor i in [1..10]:
+                    if i > 100:
+                        breakwith i * 100
+                else:
+                    99
+            """
+        stdenv/x ?= 99
+    # }}}
+
+    # {{{ deftest localModule:
+    deftest localModule:
+        def makeModule name src:
+            mod = new.module(name)
+            mod.__name__ = name
+            stdlang.parse src "TEST-MODULE" mode='execmodule' execenv=(vars mod)
+            devlogix.lmodules/[name] = mod
+            return mod
+
+        mod = makeModule "TEST" """|def f: return "it worked!"
+                                   |
+                                   |deflang foo:
+                                   |
+                                   |    defop 0 "argh" macro: `\@.f()
+                                   |
+                                   |    defop 0 "arg2" macro: `\@
+                                   "
+        stdenv/foo = mod.foo
+
+        lxexec """
+            x = (:foo argh)
+            """
+        stdenv/x ?= "it worked!"
+
+        lxexec """
+            def func a=1 b=2: b
+            x = (:foo arg2)
+            """
+
+        stdenv/x ?= mod
+        
+        del devlogix.lmodules/TEST
+    # }}}
+
+    # {{{ deftest pipeString:
+    deftest pipeString:
+
+        lxeval '''
+            """|This is
+               |a multi line
+               | string!
+               "
+               ''' ?= "This is\na multi line\n string!"
+
+        lxeval '''
+            """|This one ends
+               |with a newline
+               |
+               "
+               ''' ?= "This one ends\nwith a newline\n"
+
+        lxeval '"""|a' ?= 'a'
+        lxeval r'"""|a\nb' ?= 'a\nb'
+
+        stdenv/x = 10
+        lxeval '"""|a $x b' ?= 'a 10 b'
+
+        lxeval '"""|a $(1 + 2) b' ?= 'a 3 b'
+
+        stdenv/x = range 3
+        lxeval '"""|a $[x|=] b' ?= 'a 0=1=2 b'
+               
+    # }}}
+
+    # {{{ deftest invalidArgument:
+    deftest invalidArgument:
+        lxeval "bool (a=1)" ?raises {:SyntaxError}
+    # }}}
+
+    # {{{ deftest listComp:
+    deftest listComp:
+        lxeval "[x*10 for x in range(3)]" ?= [0,10,20]
+    # }}}
+           
+    # {{{ deftest constvar:
+    deftest constvar:
+        lxexec """|noreload x = 1
+                  "
+        stdenv/__noreload__ = ['x']
+    # }}}
+
+    # {{{ deftest symbolOp:
+    deftest symbolOp:
+        lxeval "~a" ?= data.Symbol "" "a"
+        lxeval "~a:b" ?= data.Symbol "a" "b"
+        lxeval "~abc:def" ?= data.Symbol "abc" "def"
+        lxeval "~'%:!'" ?= data.Symbol "%" "!"
+        lxeval "~('%:!')" ?= data.Symbol "%" "!"
+        lxeval "~('%' : '!')" ?= data.Symbol "%" "!"
+
+    # }}}
+
+    # {{{ deftest errorLineno:
+    deftest errorLineno:
+        try:
+            lxexec """|def foo:
+                      |
+                      |
+                      |    c = d
+                      |
+                      |foo()
+                      " [:]
+        except NameError:
+        else:
+            assert 0, "that code should have raised a name error"
+           
+        import sys
+        tb = sys.exc_info()/2
+        while tb.tb_next != None:
+            tb = tb.tb_next
+
+        tb.tb_lineno ?= 4
+    # }}}
+
+    # {{{ deftest case_:
+    deftest case_:
+        lxeval """|case 2 + 2 of:
+                  |    3: "huh?"
+                  |    4: "groovy"
+                  "
+          ?= "groovy"
+    # }}}

@@ -1,0 +1,45 @@
+limport ltest.testlang
+setlang testlang.testlang 
+
+# {{{ imports
+from os import path
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+    def debugmode x:
+
+from devlogix import data
+from devlogix.data import Doc, Location, Symbol
+# }}}
+
+defsuite main:
+
+    debugmode 0
+
+    defgroup locations:
+
+        Loc = Location
+        
+        deftest basics:
+            Loc ".a" ?? {:Loc (Loc.property, (Symbol "" "a"))}
+
+        deftest add:
+            Loc "/a" + Loc ".b" ?= Loc "/a.b"
+            Loc "//a"  + Loc ".b" ?= Loc "//a.b"
+
+        deftest getLoc:
+            def get doc loc:
+                doc.getLoc (Loc loc)
+            
+            d = Doc (Symbol "" "person")
+                    (dict name='tom'
+                          address=(Doc (Symbol "" "address")
+                                       (dict house='570 8th Main' city='Bangalore')))
+            
+            get d ".name" ?= 'tom'
+            
+            get d ".address" ?? {:Doc tag=(Symbol "" "address")}
+
+            get d ".address.city" ?= "Bangalore"
+

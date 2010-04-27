@@ -1,0 +1,276 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# {{{ imports
+setlang logix.stdlang
+
+import re
+import itertools
+import new
+import compiler
+
+try:
+    from livedesk.util import debug, debugmode
+except ImportError:
+    def debugmode x:
+
+limport ltest.testlang
+setlang testlang.testlang
+
+import devlogix
+from devlogix import rootops, parser, language
+# }}}
+
+defsuite main:
+
+    if not hasattr devlogix 'baselang':
+        devlogix.init()
+
+    lang = language.Language 'test' devlogix.langlang '__main__' .__impl__
+
+    stdenv=['__name__':'__main__',
+            'test':lang.userlang]
+
+    # {{{ def lxeval src env=None:
+    def lxeval src env=None:
+        env = env or stdenv
+        code = lang.parse src mode='exec' execenv=env
+        if len code > 0:
+            language.eval code/[0] env
+        else:
+            None
+    # }}}
+
+    # {{{ def lxexec src env=None:
+    def lxexec src env=None:
+        env = env or stdenv
+        lang.parse src mode='exec' execenv=env
+    # }}}
+
+    # {{{ def oppatt synpatt:
+    def oppatt synpatt:
+        {:language.OperatorType __syntax__=synpatt}
+    # }}}
+
+    # {{{ defgroup defop_:
+    defgroup defop_:
+
+        # {{{ deftest basics:
+        deftest basics:
+            lxeval "defop 0 expr '+' expr"
+            lang.getOp '+' ?? oppatt {:* token='+' assoc='left'}
+
+            lxeval "defop r 0 expr '-' expr"
+            lang.getOp '-' ?? oppatt {:* assoc='right'}
+
+            lxeval "defop l 0 'foo'"
+            lang.getOp 'foo' ?? oppatt {:* assoc='left'}
+
+            lxeval "defop smartspace 0 'foo'"
+            lang.getOp 'foo' ?? oppatt {:* smartspace?}
+
+            lxeval "defop 0 expr 'foo'"
+            lang.getOp 'foo' ?? oppatt {:* leftRule={:parser.ExpressionRule}
+                                           rightRule=None}
+
+            lxeval "defop 0 'foo' expr"
+            lang.getOp 'foo' ?? oppatt {:* leftRule=None
+                                           rightRule={:parser.ExpressionRule}}
+        # }}}
+
+        # {{{ deftest impArgs:
+        deftest impArgs:
+            import inspect
+            def getargs f: inspect.getargs f.func_code
+
+            lxeval "defop 0 'foo' func a b: 0"
+            getargs (lang.getOp 'foo' .func) ?? {:* ['a', 'b'] None None}
+
+            lxeval "defop 0 'foo' macro a b: 0"
+            getargs (lang.getOp 'foo' .macro) ?? {:* ['a', 'b'] None None}
+
+
+            lxeval "defop 0 'foo' func a=1 b=2 *args **kws: 0"
+            op = lang.getOp 'foo'
+            getargs op.func ?? {:* ['a', 'b'] 'args' 'kws'}
+            op.func.func_defaults ?? {:* 1 2}
+        # }}}
+
+        # {{{ deftest execImp:
+        deftest execImp:
+            lxeval "defop 0 expr 'snd' expr func a b: b"
+            lxeval "defop 0 expr 'fst' expr func a b: a"
+            lxeval "10 snd 11" ?= 11
+            lxeval "10 fst 11" ?= 10
+
+            lxeval "defop 0 expr '++' macro x: x"
+            lxeval "5++" ?= 5
+        # }}}
+    # }}}
+
+    # {{{ defgroup deflang_:
+    defgroup deflang_:
+
+        # Note: deflang has two "implementations" - one takes place
+        # during the parse, the other recreates the language when
+        # importing a pre-parsed lxc file.
+        # These test the former, the latter are tested in testbaselang
+
+        # {{{ deftest basics:
+        deftest basics:
+            lxexec "deflang foo:"
+            stdenv/foo ?? {:language.Language __impl__={:* name='foo'}}
+
+            lxexec "deflang baa(foo):"
+            stdenv/baa.__impl__ ??
+                {:* name='baa' parent=(stdenv/foo.__impl__)}
+        # }}}
+            
+        # {{{ deftest withDefop:
+        deftest withDefop:
+
+            lxexec """
+                deflang foo:
+                    defop 0 "myop"
+                """
+
+            lang.getOp "myop" ?= None
+            stdenv/foo.__impl__.getOp "myop" ?? {:language.OperatorType}
+        # }}}
+
+        # {{{ deftest forwardDecl:
+        deftest forwardDecl:
+            lxexec "deflang foo:"
+            stdenv/foo ?? {:language.Language}
+
+            lxexec """
+                deflang baa:
+                deflang eek(baa):
+                deflang baa:
+                    defop 0 'foo'
+                """
+            baa = stdenv/baa.__impl__
+            baa.getOp "foo" ?? {:language.OperatorType}
+            stdenv/eek.__impl__ ?? {:* parent=baa}
+
+            # base language error
+            lxexec """
+                deflang baa:
+                deflang baa(test):
+                    defop 0 'foo'
+                """ ?raises {:SyntaxError}
+        # }}}
+    # }}}
+
+    # {{{ defgroup setlang_:
+    defgroup setlang_:
+
+        deftest basics:
+
+            lxexec """
+                deflang foo:
+                    defop 0 expr 'baa' expr func a b: 0
+                setlang foo
+                1 baa 2
+                """ ?? {:*}
+    # }}}
+
+    # {{{ defgroup getops_:
+    defgroup getops_:
+
+        lxexec """
+            deflang lang2:
+                defop 0 expr '~~' expr func a b: a
+                defop 0 '$$' expr func a: a
+                defop 0 expr '++' func a: a
+                defop 0 expr "from" expr
+            """
+
+        # {{{ deftest basics:
+        deftest basics:
+            lxeval "getops lang2, ~~"
+            lang.getOp '~~' ?? oppatt {:* leftRule={:parser.ExpressionRule}
+                                          rightRule={:parser.ExpressionRule}}
+            len(lang.operators) ?= 1
+
+            lxeval "getops lang2, ~~ $$"
+            len(lang.operators) ?= 2
+            '~~' in lang.operators ?
+            '$$' in lang.operators ?
+        # }}}
+
+        # {{{ deftest getAll:
+        deftest getAll:
+            lxeval "getops lang2"
+            len(lang.operators) ?= 4
+            '~~' in lang.operators ?
+            '$$' in lang.operators ?
+            '++' in lang.operators ?
+        # }}}
+    # }}}
+
+    # {{{ defgroup inMacroExpansion:
+    defgroup inMacroExpansion:
+
+        deftest defop_:
+            lxexec """
+                defop 0 'makeop' macro: `defop 0 'foo'
+                makeop
+                """
+            lang.getOp 'foo' ?? {:language.OperatorType}
+
+        deftest deflang_:
+            lxexec """
+                defop 0 'makelang' macro:
+                    `deflang foolang:
+                        defop 0 "foo"
+                makelang
+                """
+            stdenv/foolang ?? {:language.Language}
+            stdenv/foolang.__impl__.getOp "foo" ?? {:language.OperatorType}
+
+        deftest getops_:
+            lxexec """
+                deflang foolang:
+                    defop 0 "foo"
+
+                defop 0 'getfoo' macro: `getops foolang, foo
+                """
+            lang.getOp 'foo' ?= None
+            lxexec "getfoo"
+            lang.getOp 'foo' ?? {:language.OperatorType}
+
+        deftest setlang_:
+            # setlang in a macro expansion doesn't work
+            lxexec """
+                defop 0 'tofoo' macro: `setlang foolang
+
+                deflang foolang:
+                    defop 0 'foo'
+
+                tofoo
+
+                defop 0 'baa'
+                """
+
+            # baa was added to \lang, not to foolang
+            lang.getOp "baa" ?? {:language.OperatorType}
+    # }}}
+            
+

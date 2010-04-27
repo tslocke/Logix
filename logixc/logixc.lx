@@ -1,0 +1,619 @@
+setlang logix.stdlang
+
+# {{{ imports
+import re
+import subprocess
+import os
+from os import path
+
+try:
+    from livedesk.util import debug
+except ImportError: 
+
+from livedesk.util import concat, flattenList
+
+limport converter
+getops converter.convertlang, defconverter
+# }}}
+
+compileCommand = "cl /nologo"
+compilerLineRx = re.compile r"^(?P<file>[^\(]+)\((?P<line>[0-9]+)\) : (?P<msg>.*)"
+
+# {{{ deflang typel(logix.quotelang):
+deflang typel(logix.quotelang):
+
+    defop 200 "(" $argtypes:[ expr ("," expr)* ] $returntype:[">" expr] ")*"
+
+    defop 200 expr "*" func t: "$t*"
+    
+    defop 200 expr "[" [expr]/- "]"
+
+    defop 0 "struct" $name:[symbol] $fields:[":" block:(symbol ":" expr)]
+            
+    defop 0 "enum:" block:(symbol ["=" expr@^])
+# }}}
+    
+# {{{ deflang logixc:
+# {{{ defop 0 'binop' term term
+defop 0 'binop' term term
+    macro binding tok:
+        # HACK: We hit a subtle problem if we try to insert tok directly
+        # into the code-data (try it!)
+        t = logix.eval tok
+        `defop \binding expr (lit \t) expr func l r: "($l $(\t) $r)"
+# }}}
+
+deflang logixc(logix.quotelang):
+
+    # {{{ funcprotoSyn = 
+    funcprotoSyn = (:logix.syntaxlang
+                     $name:symbol
+                     "("
+                     $args:[$:(symbol ":" expr@typel) ($:("," symbol":" expr@typel))* ]
+                     ")"
+                     $returnt:[">" expr@typel]/void)
+    # }}}
+                     
+    # {{{ continuation
+    defop 100 "__continue__" "(" [expr ("," expr)* ]/- ")"
+    # }}}
+
+    defop 0 "(" expr ")"
+    
+    # {{{ Simple ops
+    binop 5 "="
+
+    binop 60 "+"
+    defop  60 [expr]/- "-" expr
+        func *args:
+            if len args == 2:
+                "($(args/0) - $(args/1))"
+            else:
+                "(-$(args/0))"
+                
+    binop 65 "/"
+    binop 65 "%"
+
+    binop 18 "+="
+    binop 18 "-="
+    binop 18 "*="
+    binop 18 "/="
+
+    binop 35 "<"
+    binop 35 "<="
+    binop 35 ">"
+    binop 35 ">="
+    binop 35 "=="
+    binop 35 "!="
+
+    binop 25 "and"
+    binop 20 "or"
+    defop 30 "not" expr func x: "(not $x)"
+
+    defop 90 expr "." symbol func x field: "($x.$field)"
+    defop 90 expr "->" symbol func x field: "($x->$field)"
+
+    defop 110 "&" expr func x: "(&$x)"
+
+    defop 70 expr "++" func x: "($x++)"
+    defop 70 expr "--" func x: "($x--)"
+    # }}}
+
+    # {{{ defop 65 [expr]/- "*" expr func *args:
+    defop 65 [expr]/- "*" expr func *args:
+        if len args == 1:
+            "(*$(args/0))"
+        else:
+            "($(args/0) * $(args/1))"
+    # }}}
+
+    # {{{ string / character
+    defop 0 '"' freetext /[^"\\]*(?:\\.[^"\\]*)*/ '"'
+        func s: '"' + s + '"'
+        
+    defop 0 "'" freetext /./ "'"
+        func c: "'" + c + "'"
+    # }}}
+
+    defop 50 expr "[" expr "]" func x sub: "($x[$sub])"
+
+    # {{{ Control flow
+    # {{{ defop 0 "if" $test:expr ":" $body:block
+    defop 0 "if" $test:expr ":" $body:block
+                  $elifs:( [eol]/- "elif" $test:expr ":" $body:block )*
+                  $else_:[ [eol]/- "else:" block ]
+        func test body elifs _else=None:
+            """|if ($test) {
+               |    $(block body)
+               |}
+               "
+               + ''.join listfor elf in elifs:
+                             """|else if ($(elf/test)) {
+                                |    $(block elf/body)
+                                |}
+                                "
+               + if _else:
+                     """| else {
+                        |    $(block _else)
+                        |}
+                        "
+                 else:
+                     ""
+    # }}}
+                  
+    defop 0 "while" $test:(expr ("," expr)*) ":"
+                    $body:block
+        func test body:
+            teststr = ", ".join (test *> str)
+            """|while ($teststr) {
+               |    $(block body)
+               |}
+               "
+
+    # {{{ defop 0 "for" $init:(expr ("," expr)*)
+    defop 0 "for" $init:[expr ("," expr)*]
+              ";" $test:[expr ("," expr)*]
+              ";" $step:[expr ("," expr)*]
+              ":" $body:block
+    # }}}
+
+    defop 0 "do:" $body:block [ [eol]/- "while" $test:(expr ("," expr)*) ]/-
+
+    # {{{ defop 0 expr "::" expr func label x:
+    defop 0 expr "::" expr func label x:
+        assert label isa logix.Symbol
+        "$label: $x"
+    # }}}
+
+    defop 0 "goto" symbol func label: "goto $label"
+
+    defop 0 "break" func: "break"
+    defop 0 "continue" func: "continue"
+    defop 0 "return" [expr]/- func x=None : "return $x"
+    # }}}
+
+    # {{{ declarations
+    defop 0 expr ":" expr@typel $init:["=" ( "{" expr ("," expr)* "}"
+                                           | expr) ]
+            
+    defop 0 "def" $modifiers:(["inline"]/- ["foo"]/-) funcprotoSyn $body:[":" block]
+
+    defop 0 "typedef" symbol expr@typel
+    # }}}
+
+    # cast
+    defop 0 "(:" expr@typel ")" expr
+
+    # {{{ defop 50 expr "?" expr ":" expr
+    defop 50 expr "?" expr ":" expr
+        func a b c: "$a ? $b : $c"
+    # }}}
+
+    # {{{ defop 0 "include" ( '"' <q> freetext upto /"/
+    defop 0 "include" ( '"' <q> freetext upto /"/
+                      | '<' <a> freetext upto />/ #"
+                      )
+        func kind filename:
+            if kind == ~q:
+                '#include "%s"' % filename
+            else:
+                "#include <$filename>"
+    # }}}
+
+    # {{{ defop 0 "extern" ( <var> symbol "::" expr@typel
+    defop 0 "extern" ( <var> symbol "::" expr@typel
+                     | <func> "def" funcprotoSyn
+                     )
+    # }}}
+# }}}
+
+# {{{ Convert to C
+# {{{ def typeDecl name type lineno=None:
+def typeDecl name type lineno=None:
+    """|Fix C's wierdness about mixing names and types.
+       |
+       | Passed name and type as code-data
+       | Returns list of code-data and strings suitable
+       | for passing to the converter
+       "
+    array = typel.__impl__.getOp '['
+    funcptr = typel.__impl__.getOp '('
+    
+    res = if type isa array:
+              if len type == 1:
+                  typeDecl (name + "[]") type/0
+              else:
+                  sizec, _ = toC.convert type/1
+                  typeDecl (name + "[$sizec]") type/0 
+              
+          elif type isa funcptr:
+              rtype = type/returntype? or "void"
+              atypes = []
+              if type/argtypes?:
+                  for i, atype in enumerate type/argtypes:
+                      atypes.append atype
+                      if i != len type/argtypes - 1:
+                          atypes.append ", "
+              [rtype, " (*$name)("] + atypes + [")"]
+          
+          else:
+              [type, " " + name]
+
+    if lineno is not None:
+        res = logix.flist res
+        logix.setmeta res lineno=lineno
+
+    res
+
+    
+    #typeMods = ''
+    #while 1:
+    #    if type isa array:
+    #        if len type == 1:
+    #            typeMods += "[]"
+    #        else:
+    #            sizec, _ = toC.convert type/1
+    #            typeMods += "[$sizec]"
+    #        type = type/0
+    #    else:
+    #        break
+    #
+    #if lineno is not None:
+    #    logix.setmeta type lineno=lineno
+    #return [type, " " + name + typeMods]
+# }}}
+
+# {{{ def funcproto name args returnt:
+def funcproto name args returnt:
+    argstr = ", ".join listfor aname, typ in (args or []):
+                           typeDecl aname typ
+
+    returnt = returnt or "void"
+    "$returnt $name($argstr)"
+# }}}
+
+noSemi = tuple [logixc.__impl__.getOp x
+                for x in ('if',
+                          'while',
+                          'for',
+                          'include',
+                          'def',
+                          'do:')]
+
+vardecl = (:logixc ``:)
+funcdecl = (:logixc ``def)
+
+defconverter toC:
+
+    # {{{ block lines:
+    block top lines:
+        if top:
+            funcs = []
+            others = []
+            for line in lines:
+                if line isa funcdecl:
+                    funcs.append line
+                else:
+                    others.append line
+            others + funcs
+        else:
+            decls = []
+            statements = []
+            for line in lines:
+                if line isa vardecl:
+                    # make a new vardecl without the init
+                    lineno = logix.getmeta line 'lineno'
+                    name = line/0
+                    typ = line/1
+                    decl = vardecl line/0 line/1
+                    logix.setmeta decl lineno=lineno
+                    decls.append decl
+                    
+                    if line/init?:
+                        init = line/init
+                        s = (:logixc ` \name = \init)
+                        logix.setmeta s lineno=lineno
+                        statements.append s
+                else:
+                    statements.append line
+            decls + statements
+    # }}}
+
+    line l:
+        <if l isa noSemi>-
+        $l
+        <else>-
+        $l;
+        <>-
+        ---
+       
+    # {{{ logixc operators:
+    logixc operators:
+
+        __continue__ := name *args :$name($[args|, ])---
+
+        ? := test tx fx :($test ? $tx : $fx)---        
+
+        # {{{ Misc
+        ( := x :($x)---
+
+        + / % > < >= <= and or == != += -= *= /= . =
+            := l r :($l <op> $r)---
+
+        -> := l r :(($l)->$r)---
+
+        - * := *args:<if len args == 2>($(args/0) <op> $(args/1))<else>(<op>$(args/0))<>---
+
+        not := x :(!$x)---
+
+        & := x :(&$x)---
+
+        ++ -- := x :($x<op>)---
+
+        * := *args :<if len args == 2>($(args/0) * $(args/1))<else>(-$(args/0))<>---
+
+        " ' := text :<op>$text<op>---
+
+        #"
+
+        [ := array index :($array[$index])---
+        # }}}
+
+        # {{{ Control flow
+        if := test body elifs else_=None:
+            if ($test) {
+                @body
+            }
+            <for test, body in elifs>-
+            else if ($test) {
+                @body
+            }
+            <>-
+            <if else_>-
+            else {
+                @else_
+            }
+            <>-
+            ---
+
+        while := test body:
+            while ($[test|, ]) {
+                @body
+            }
+            ---
+
+        for := init test step body:
+            @init
+            for (; $[test|, ]; $[step|, ]) {
+                @body
+            }
+            ---
+
+        do: := body test=None:
+            <if test>-
+            do {
+                @body
+            } while($[test|, ])
+            <else>
+            {
+                @body
+            }
+            <>
+            ---
+
+        :: := label x:
+            $label: $x
+            ---
+
+        goto := label :
+            goto $label
+            ---
+
+        break continue := :<op>---
+
+        return := x=None:
+            <if x is None>return<else>return $x<>
+            ---
+        # }}}
+
+        # {{{ Declarations
+        : := name typ init=None:
+            <do:
+                main = typeDecl name typ
+            >-
+            <if init is None>-
+            $main
+            <elif init isa logix.flist>-
+            $main = {$[elems|, ]}
+            <else>-
+            $main = $init
+            <>-
+            ---
+
+        def := name args=None returnt=None body=None modifiers=[]:
+            <do:
+                allArgs = [typeDecl aname typ for aname, typ in args or []]
+                modifiers = modifiers *> {if it == 'inline': '__inline' else: it}
+                mods = [mod + ' ' for mod in modifiers]
+            >-
+            <if body>-
+            $[mods]$returnt $name($[allArgs|, ]) {
+                @body
+            }
+            <else>
+            $[mods]$returnt $name($[allArgs|, ]);
+            <>
+            ---
+
+        typedef := name typ:
+            typedef $(typeDecl name typ)
+            ---
+        # }}}
+
+        (: := typ x :($typ)$x---
+
+        include := kind filename :
+            <if kind == ~q>-
+            #include "$filename"
+            <else>-
+            #include \<$filename>
+            <>-
+            ---
+
+        extern := kind *args **kws:
+            $(do:
+                if kind == ~var:
+                    name, typ = fixTypeDecl args/0 args/1
+                    "extern $typ $name"
+                else:
+                    funcproto args/1 args/args args/["return"] []
+            )
+            ---
+    # }}}
+
+    # {{{ typel operators:
+    typel operators:
+
+        * := t:$t*---
+
+        *( := argtypes=None returntype=None:
+            
+        
+        [ := t size=None :
+            <if size is None>-
+            $t[]
+            <else>-
+            $t[$size]
+            <>-
+            ---
+
+        struct := name=None fields=None:
+            <if fields is None>-
+            struct $name
+            <else>-
+            <do:
+                body = [typeDecl field/0 field/1 (logix.getmeta field ~lineno)
+                        for field in fields]
+            >-
+            struct $(name or "") {
+                @body
+            }
+            <>-
+            ---
+
+        enum: := *fields :
+            <do: f = [if init is None:
+                                name
+                            else:
+                                "$name = $init"
+                      for name, init in fields]
+            >
+            enum {$[f|, ]}
+            ---
+    # }}}
+# }}}
+
+# {{{ def test:
+def test:
+    code = logix.parse logixc
+        """|x : int*[]
+           |f : (int, long > char*)*
+           |typedef foo struct:
+           |    a : int
+           |x = 1
+           |y = 2
+           |z : int = 10
+           |if a > b:
+           |    1 + 2
+           |    f()
+           |    1 + 3
+           |elif a < b:
+           |    if x == 10:
+           |        f(1, 2, x+1, g())
+           |        x = 11
+           |        x = 12
+           |        foo : int = 10
+           |    if x == 10:
+           |        f(1, 2, x+1, g())
+           |        x = 11
+           |        x = 12
+           |else:
+           |    3 + 3
+           |def inline f(a : int) > int:
+           |   return 0
+           |def g(a : int) > int:
+           |   return 0
+           "
+           
+    toC.test code
+    code
+# }}}
+
+# {{{ def generateC lcCode filename:
+def generateC lcCode filename:
+    root, _ = path.splitext filename
+    cfile = root + ".c"
+    csrc, linemap = toC.convert lcCode
+    file cfile 'wU' .write (csrc + '\n')
+    return cfile, linemap
+# }}}
+
+# {{{ def generateH filename:
+def generateH filename:
+    code = logix.parse logixc (file filename 'U')
+    root, _ = path.splitext filename
+    hfile = root + ".h"
+    csrc, linemap = toC.convert code
+    file hfile 'wU' .write (csrc + '\n')
+    return hfile, linemap
+# }}}
+
+# {{{ def compileSrc filename run=False show=False:
+def compileSrc filename run=False show=False:
+    lcCode = logix.parse logixc (file filename 'U')    
+    compileCode lcCode filename run show
+# }}}
+
+# {{{ def compileCode lcCode filename run=False show=False:
+def compileCode lcCode filename run=False show=False:
+
+    srcdir = path.dirname filename
+
+    include = (:logixc ``include)
+    for line in lcCode:
+        if line isa include:
+            if line/1.endswith ".lh":
+                generateH (path.join srcdir line/1)
+                line/1 = line/1/[:-2] + "h"
+
+    if show:
+        toC.test lcCode
+
+    cfile, linemap = generateC lcCode filename
+    compiler = subprocess.Popen "$compileCommand $cfile" stdout=subprocess.PIPE
+    output = compiler.communicate()/0
+
+    for line in output.splitlines():
+        m = compilerLineRx.search line
+        if m:
+            line, file, msg = m.group 'line', m.group 'file', m.group 'msg'
+            file = re.sub r"\.c$" ".lc" file
+            line = linemap/[int line]
+            print "$file:%5s : $msg" % line
+        else:
+            print "C compiler: $line"
+
+    if run and compiler.returncode == 0:
+        root, _ = path.splitext cfile
+        exe = path.basename root
+        subprocess.call exe
+
+    return None
+# }}}
+
+# {{{ def show filename:
+def show filename:
+    cfile = generateC filename
+    subprocess.call "indent $cfile"
+    print file cfile .read()
+# }}}

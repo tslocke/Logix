@@ -1,0 +1,235 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# Things are a bit wiered here because we're bootstrapping. This file is not
+# imported as a regular Logix module, but handled specially in logix.rootops
+
+deflang base(langlang):
+
+    # {{{ continuation operator
+    defop 100 "__continue__"
+        $:( "(" [ "*" $star:expr ["," "**" $dstar:expr]/-
+                | "**" $dstar:expr
+                | expr ("," expr)*
+                  [ "," ( "*" $star:expr ["," "**" $dstar:expr]/-
+                        | "**" $dstar:expr)]/-
+                ]/- ")" <call> 
+          | "[" ( <(None)> ":" [expr] [":" expr] "]" <slice>
+                | expr ( ("," expr)* "]" <subscript>
+                       | ":" [expr] [ ":" expr ] "]" <slice>))
+          )+
+    # }}}
+
+    defop 0 "(" [expr]/- ")"
+
+    # {{{ String literals
+    # Yes - an incredible 36 operators just to handle string literals.
+    # Necesary because whitespace is not allowed between the modifiers and
+    # open quote.
+    # Who's idea was it to allow both upper and lower case modifiers?
+    #
+    # We don't even quite match Python syntax. """asd\""" is not a complete
+    # string in Python, but it is here. To fix this we need a parse rule
+    # where a regex can be specified for the free-text rather than the
+    # terminator
+
+    defop 0 '"'   freetext /[^"\\]*(?:\\.[^"\\]*)*/ '"'
+    defop 0 "'"   freetext /[^'\\]*(?:\\.[^'\\]*)*/ "'"     
+    defop 0 "'''" freetext upto /'''/                   
+    defop 0 '"""' freetext upto /"""/                   
+                   
+    defop 0 'r"'   freetext /[^"\\]*(?:\\.[^"\\]*)*/ '"'    
+    defop 0 "r'"   freetext /[^'\\]*(?:\\.[^'\\]*)*/ "'"    
+    defop 0 'r"""' freetext upto /"""/                   
+    defop 0 "r'''" freetext upto /'''/                  
+    defop 0 'R"'   freetext /[^"\\]*(?:\\.[^"\\]*)*/ '"'     
+    defop 0 "R'"   freetext /[^'\\]*(?:\\.[^'\\]*)*/ "'"    
+    defop 0 'R"""' freetext upto /"""/                   
+    defop 0 "R'''" freetext upto /'''/                  
+                                                    
+    defop 0 'u"'   freetext /[^"\\]*(?:\\.[^"\\]*)*/ '"'           
+    defop 0 "u'"   freetext /[^'\\]*(?:\\.[^'\\]*)*/ "'"    
+    defop 0 'u"""' freetext upto /"""/                  
+    defop 0 "u'''" freetext upto /'''/                  
+    defop 0 'U"'   freetext /[^"\\]*(?:\\.[^"\\]*)*/ '"'    
+    defop 0 "U'"   freetext /[^'\\]*(?:\\.[^'\\]*)*/ "'"    
+    defop 0 'U"""' freetext upto /"""/                  
+    defop 0 "U'''" freetext upto /'''/                  
+                                           
+    defop 0 'ur"'   freetext /[^"\\]*(?:\\.[^"\\]*)*/ '"'   
+    defop 0 "ur'"   freetext /[^'\\]*(?:\\.[^'\\]*)*/ "'"   
+    defop 0 'ur"""' freetext upto /"""/                 
+    defop 0 "ur'''" freetext upto /'''/                 
+    defop 0 'uR"'   freetext /[^"\\]*(?:\\.[^"\\]*)*/ '"'   
+    defop 0 "uR'"   freetext /[^'\\]*(?:\\.[^'\\]*)*/ "'"   
+    defop 0 'uR"""' freetext upto /"""/                 
+    defop 0 "uR'''" freetext upto /'''/            
+                                           
+    defop 0 'Ur"'   freetext /[^"\\]*(?:\\.[^"\\]*)*/ '"'   
+    defop 0 "Ur'"   freetext /[^'\\]*(?:\\.[^'\\]*)*/ "'"   
+    defop 0 'Ur"""' freetext upto /"""/            
+    defop 0 "Ur'''" freetext upto /'''/            
+    defop 0 'UR"'   freetext /[^"\\]*(?:\\.[^"\\]*)*/ '"'   
+    defop 0 "UR'"   freetext /[^'\\]*(?:\\.[^'\\]*)*/ "'"   
+    defop 0 'UR"""' freetext upto /"""/                 
+    defop 0 "UR'''" freetext upto /'''/                 
+    # }}}
+    
+    defop 4 expr ";" expr (';' expr)*
+    defop r 5 expr "=" expr
+    defop 7 expr "," [ expr (',' expr)* [',' <>]/- ]/-
+
+    defop 90 expr "." symbol
+
+    # {{{ Binary operators
+    defop 75 expr "**" expr
+    defop 70 "~" expr
+    defop 65 expr "%" expr
+    defop 65 expr "/" expr
+    defop 65 expr "//" expr
+    defop 65 expr "*" expr
+    defop 60 [expr]/- "-" expr
+    defop 60 expr "+" expr
+
+    defop 55 expr "<<" expr
+    defop 55 expr ">>" expr
+
+    defop 50 expr "&" expr
+    defop 45 expr "^" expr
+    defop 40 expr "|" expr
+
+    defop 35 expr "==" expr
+    defop 35 expr "<>" expr
+    defop 35 expr "!=" expr
+    defop 35 expr ">" expr
+    defop 35 expr ">=" expr
+    defop 35 expr "<" expr
+    defop 35 expr "<=" expr
+    defop 35 expr "is" $not:["not"] expr
+    defop 35 expr "in" expr
+
+    defop 30 $elem:[expr] "not" $in:["in"] expr
+    defop 25 expr "and" expr
+    defop 20 expr "or" expr
+    # }}}
+
+    # {{{ Assignment operators
+    defop 18 expr "+=" expr
+    defop 18 expr "*=" expr
+    defop 18 expr "-=" expr
+    defop 18 expr "/=" expr
+    defop 18 expr "**=" expr
+    defop 18 expr "%=" expr
+    defop 18 expr "&=" expr
+    defop 18 expr "|=" expr
+    defop 18 expr "^=" expr
+    # }}}
+
+    # {{{ List and dict
+    defop 0 "[" ( "]" <list>
+                | expr ( ("," expr)* [',' <>]/- <list> "]"
+                       | $quals:("for" expr "in" expr
+                                 $ifs:("if" expr)* )+ <comp> "]"))
+
+    defop 0 "{" [ expr ":" expr ("," expr ":" expr)* ] "}"
+    # }}}
+		 
+    # {{{ Control flow
+    defop 0 "if" $tests:( $:($test:expr ":" $body:block)
+                          ( [eol]/- $:("elif" $test:expr ":" $body:block) )*)
+                 $else_:[ [eol]/- "else:" block ]
+
+    defop 0 "while" $test:expr ":"
+                    $body:block
+                    $else:[ [eol]/- "else:" block ]
+
+    defop 0 "for" expr "in" expr ":"
+                  $body:block
+                  $else:[ [eol]/- "else:" block]
+
+
+    defop 0 "do:" block
+
+    defop 0 "break"
+    defop 0 "continue"
+    defop 0 "return" [expr]
+    defop 0 "yield" expr
+    # }}}
+
+    # {{{ Definitions
+    # Variables \star and \dstar are set in rootops.makeLanguages
+    
+    defop 0 "lambda" $args:[ $star:("*" symbol) ["," $dstar:("**" symbol)]/-
+                           | $dstar:("**" symbol)
+                           | $:(symbol ["=" expr]/-) ($:("," symbol ["=" expr]/-))*
+                             [ "," ( "*" $star:symbol ["," "**" $dstar:symbol]/-
+                                   | "**" $dstar:symbol
+                                   )]/-
+                           ]/-
+                     ":" $body:expr
+
+    defop 0 "def" symbol
+                  "("
+                  $args:[ $star:("*" symbol) ["," $dstar:("**" symbol)]/-
+                        | $dstar:("**" symbol)
+                        | $:(symbol ["=" expr]/-) ($:("," symbol ["=" expr]/-))*
+                          [ "," ( "*" $star:symbol ["," "**" $dstar:symbol]/-
+                                | "**" $dstar:symbol
+                                )]/-
+                        ]/-
+                  ")"
+                  ":" $body:block
+
+    defop 0 "class" $name:symbol $bases:[ "(" expr ("," expr)* ")" ] ":" $body:block
+    # }}}
+
+    # {{{ Import
+    defop 0 "import" $module:(symbol ("." symbol)*) $as:[ "as" symbol]
+
+    defop 0 "limport" $module:(symbol ("." symbol)*) $as:["as" symbol]
+
+    defop 0 "from" $module:(symbol ("." symbol)*)
+                   "import" $imp:( "*" <star>
+                                 | symbol ["as" symbol ] ("," symbol ["as" symbol ])*)
+    # }}}
+
+    # {{{ Exceptions
+    defop 0 "try" ":" $body:block 
+                  ( $excepts:( [eol]/- "except"
+                               [ $exc:expr [ "," $target:expr ]/- ]/-
+                               ":" $handler:block )+
+                    $else:[ [eol]/- "else:" block ]
+                  | [eol]/- "finally:" $finally:block )
+
+
+    defop 0 "raise" [expr ["," expr ["," expr]/-]/-]/-
+    # }}}
+
+    # {{{ Other statements
+    defop 0 "assert" expr ["," expr]
+
+    defop 15 "print" ( <tofile> ">>" expr [("," expr)+ $nonl:[","]]
+                     | <std> [expr ("," expr)* $nonl:[","]] )
+
+    defop 0 "exec" expr ["in" expr ["," expr ] ]
+
+    defop 0 "del" expr
+
+    defop 0 'global' expr ("," expr)*
+    # }}}

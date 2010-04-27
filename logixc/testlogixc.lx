@@ -1,0 +1,120 @@
+# {{{ init
+setlang logix.stdlang
+
+import re
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+    def debugmode x:
+
+limport ltest.testlang
+setlang testlang.testlang
+
+limport logixc
+# }}}
+
+logixc = logixc.logixc
+
+defop 0 "ctest" expr@logixc ";" func x: x
+
+def oneSpace s:
+    return re.sub r"[ \n]+" " " s
+
+def wcompare a b:
+    (oneSpace a) ?= (oneSpace b)
+    
+defsuite main:
+
+    # {{{ deftest simple:
+    deftest simple:
+        ctest a ; ?= 'a'
+        ctest 1 ; ?= 1
+        
+        ctest a = 1 ; ?= '(a = 1)'
+        ctest a = b ; ?= '(a = b)'
+
+        ctest a = 1 + 2 * 3 ; ?= '(a = (1 + (2 * 3)))'
+    # }}}
+
+    # {{{ deftest strs:
+    deftest strs:
+        ctest "abc" ; ?= '"abc"'
+        ctest 'a' ; ?= "'a'"
+    # }}}
+
+    # {{{ deftest defs:
+    deftest defs:
+        ctest def f() > int:
+                  1
+                ; ?= """|int f() {
+                        |    1;
+                        |}
+                        "
+        
+        ctest def f(a : int, b : char*) > char** ;
+            ?= "char** f(int a, char* b);"
+
+        x = ctest
+            def max(a : int, b : int) > int:
+                if a > b:
+                    return a
+                else:
+                    return b
+            ;
+        wcompare x  """|int max(int a, int b) {
+                       |    if ((a > b)) {
+                       |        return a;
+                       |    } else {
+                       |        return b;
+                       |    }
+                       |}
+                       "
+    # }}}
+
+    # {{{ deftest funcCall:
+    deftest funcCall:
+        ctest f(a, b) ; ?= "f(a, b)"
+    # }}}
+
+    # {{{ deftest vars:
+    deftest vars:
+        ctest a : int ; ?= "int a"
+        ctest a : int = 1 ; ?= "int a = 1" 
+        ctest a : int* ; ?= "int* a" 
+        ctest a : int[] ; ?= "int a[]" 
+        ctest a : int[][2] ; ?= "int a[][2]" 
+        ctest a : int[] = {1, 2, 3} ; ?= "int a[] = {1, 2, 3};"
+
+        ctest a : enum:
+            x
+            y
+            z = 10
+          ; ?= "enum {x, y, z = 10} a"
+
+        ctest foo : struct:
+            x : int
+            y : void*
+          ;
+          ?= """|struct {
+                |    int x;
+                |    void* y;
+                |} foo
+                "
+    # }}}
+        
+    # {{{ deftest typedef:
+    deftest typedef:
+
+        ctest typedef ptr void* ; ?= "typedef void* ptr;"
+
+        ctest typedef person struct p:
+            name : char*
+            friends : struct p[]
+          ; ?= """|typedef struct p {
+                  |    char* name;
+                  |    struct p friends[];
+                  |} person;
+                  "
+    # }}}
+

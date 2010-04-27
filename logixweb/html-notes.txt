@@ -1,0 +1,63 @@
+{{{ General
+A 	  	
+B 	  	
+BLOCKQUOTE 	
+BR 	  	
+CODE 	  	
+DEL 	  	
+HR 	  	
+I 	  	
+H1-6
+IMG 	  	
+
+LI 	  	
+OL 	  	
+UL 	  	
+
+P 	  	
+PRE 	  	
+Q 	  	
+S 	  	
+SUB 	  	
+SUP 	  	
+U 	  	
+
+DL 	  	
+DT 	  	
+DD 	  	
+DFN 	  	
+}}}
+
+{{{ Tables
+TABLE 	  	
+TBODY
+TD 	  	
+COL 	  	
+COLGROUP 	
+CAPTION 	
+TFOOT 	  	
+TH 	  	
+THEAD 	  	
+TR 	  	
+}}}
+
+{{{ Forms
+BUTTON 	  	
+FIELDSET 	
+FORM 	  	
+INPUT 	  	
+OPTGROUP 	
+OPTION 	  	
+SELECT 	  	
+TEXTAREA 	
+}}}
+
+DIV / SPAN
+
+{{{ Frames
+FRAME
+FRAMESET
+IFRAME
+}}}
+
+SCRIPT	

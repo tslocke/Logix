@@ -1,0 +1,86 @@
+setlang logix.stdlang
+
+try:
+    from livedesk.util import debug
+except ImportError: 
+
+limport logixc.logixc
+
+lc = logixc.logixc
+funcprotoSyn = lc.funcprotoSyn
+typel = logixc.typel
+
+deflang ec(lc):
+
+    # {{{ defop 0 "structclass" 
+    defop 0 "structclass" $name:symbol ":"
+            $features:block:( <func> "def" funcprotoSyn $body:[":" block]
+                            | <var>  symbol ":" expr@typel
+                            )
+        macro name features:
+            plainfuncs = features ?> {it/0 == ~func and it/body? is not None}
+            cdef = (:lc ``def)
+            
+            funcdefs = [cdef ~("$(name)_$(f/name)")
+                             args=f/args?
+                             body=f/body
+                             returnt=f/returnt?
+                        for f in plainfuncs]
+            for new, old in funcdefs ,* plainfuncs:
+                logix.copymeta old new
+
+            fields = features ?> {it not in plainfuncs}
+            fields2 = listfor field in fields:
+                kind = field/0
+                if kind == ~func:
+                    fname = field/name
+                    argtypes = [t for a, t in field/args]
+                    typ = (:typel ``( ) argtypes=argtypes returntype=field/returnt?
+                else:
+                    fname = field/1
+                    typ = field/2
+                logix.flist [fname, typ]
+
+            for old, new in fields ,* fields2:
+                logix.copymeta old new
+
+            strct = (:typel ``struct) fields=fields2
+            typedef = (:lc `typedef \name \strct )
+
+            return logix.splice (funcdefs + [typedef])
+    # }}}
+
+    defop 90 expr "::[" expr "]" macro alistx indexx:
+        setlang lc
+        `alist_item(\alistx, \indexx)
+
+
+    defop 0 expr "::append" expr macro alistx itemx:
+        setlang lc
+        `alist_append(\alistx, \itemx)
+
+    defop 0 expr "::new" symbol macro name type:
+        setlang lc
+        `\name : \type = xmalloc(sizeof(\type))
+
+    defop 0 "new-struct" symbol ":" symbol ":" $fields:block:(symbol "=" expr)
+        macro name typ fields:
+            fieldInits = [(:lc \name->\fname = \val for name, val in fields)]
+            logix.splice [(:lc `\name : \typ = xmalloc(sizeof(\typ)))] + fieldInits
+
+    defop 0 "foreach" $name:symbol ":" $typ:expr@typel "in" $alistx:expr ":" $body:block
+        macro name typ alistx body:
+            gensyms l i
+            setlang lc
+            `do:
+                \l = \alistx
+                for \i = 0; \i < \l->len; \i++:
+                    \name : \typ = (: \typ)\l->items[\i]
+                    \*body
+
+            
+
+def compileSrc filename run=False show=False:
+    lcCode = logix.parse ec (file filename 'U') mode='expand'
+    logixc.compileCode lcCode filename run show
+    

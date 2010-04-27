@@ -1,0 +1,171 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# {{{ imports
+setlang logix.stdlang
+
+import re
+import itertools
+import new
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+    def debugmode x:
+
+limport ltest.testlang
+setlang testlang.testlang
+
+import devlogix
+from devlogix import language, data
+from devlogix.data import Doc, Symbol, Location as Loc
+# }}}
+
+symSyntax = (:logix.syntaxlang
+             freetext /\s*[a-zA-Z_][a-zA-Z_0-9\-]*(:[a-zA-Z_][a-zA-Z_0-9\-]*)?\s*/)
+
+defop 0 "~" symSyntax macro s:
+    bits = s.strip().split ":"
+    if len bits == 1:
+        `\@.Symbol "" \bits/0
+    else:
+        `\@.Symbol \bits/0 \bits/1
+
+defsuite main:
+
+    debugmode 0
+
+    if not hasattr devlogix 'baselang':
+        devlogix.init with_std=False
+
+    doclang = devlogix.imp "devlogix.doclang" .doclang.__impl__
+
+    devlogix.clearCaches()
+
+    stdenv = [:]
+
+    # {{{ def lxeval src env=None:
+    def lxeval src env=None:
+        env = if env is None: stdenv else: env
+        env/__name__ = '__main__'
+        baselang = logix.baselang.__impl__
+        s = """|setlang logix.baselang
+               |limport devlogix.doclang
+               |getops doclang.docops
+               |
+               " + src
+        code = devlogix.parse devlogix.baselang s mode='exec' execenv=env
+        language.eval code/[-1] env
+    # }}}
+
+    # {{{ deftest basics:
+    deftest basics:
+
+        lxeval "D{foo}" ?? {:Doc tag=(~foo)}
+
+        lxeval "D{ns:foo}" ?? {:Doc tag=(~ns:foo)}
+
+        lxeval "D{foo -a}" ??  {:Doc tag=(~foo) /(~a)=data.true}
+        
+        lxeval "D{foo a='foo'}" ?? {:Doc /(~a)='foo'}
+        
+        lxeval "D{foo a=1}" ?? {:Doc /(~a)=1}
+
+        lxeval "D{foo blah:a=1}" ?? {:Doc /(~blah:a)=1}
+        
+        lxeval "D{foo a=(1+2)}" ?? {:Doc /(~a)=3}
+
+        lxeval "D{foo a={baa (1+2)}}" ?? {:Doc /(~a)={:Doc 3}}
+
+        lxeval "D{foo a=1 b=2}" ?? {:Doc /(~a)=1 /(~b)=2}
+
+        lxeval "D{foo 1 2 3}" ?? {:Doc 1 2 3}
+        
+        lxeval "D{foo 1 'a' x:y}" ?? {:Doc 1 'a' ~x:y}
+        
+        lxeval "D{foo p=1 q=2 1 'a' x:y}" ?? {:Doc /(~p)=1 /(~q)=2 1 'a' ~x:y}
+
+        lxeval "D{('|')}" ?? {:Doc tag=(Symbol "" "|")}
+
+        class X: a=1
+        stdenv/X = X
+        lxeval "D{a {b {c (X.a)}}}" ?? {:Doc}
+    # }}}
+
+    # {{{ deftest markupStyle:
+    deftest markupStyle:
+        d = lxeval "D{doc;This is some {b;bold} text}"
+        d ?? {:Doc tag=(~doc) "This is some " {:Doc tag=(~b) "bold"} " text"}
+
+        d = lxeval "D{doc;How about a {a href='somewhere';groovy link}?}"
+        d ?? {:Doc tag=(~doc) "How about a " {:Doc tag=(~a) /(~href)="somewhere" "groovy link"} "?"}
+    # }}}
+
+    # {{{ deftest splice:
+    deftest splice:
+        stdenv/l = [1, 2, 3]
+        lxeval "D{foo (*l)}" ?? {:Doc 1 2 3}
+
+        stdenv/d = Doc ~x [1, 2, 3] (dict a=4 b=5 c=6)
+        lxeval "D{foo (*d)}" ?? {:Doc 1 2 3 /(~a)=4  /(~b)=5  /(~c)=6}
+
+        lxeval "D{foo (*d) 10 (*l)}" ?? {:Doc 1 2 3 10 1 2 3 /(~a)=4  /(~b)=5  /(~c)=6}
+
+        lxeval "D{foo x=(*foo)}" ?raises {:SyntaxError}
+    # }}}
+
+    # {{{ deftest locations:
+    deftest locations:
+
+        lxeval "D[.a.b.c]" ?? {:Doc {:Loc /*=[(Loc.property, ~a),
+                                              (Loc.property, ~b),
+                                              (Loc.property, ~c)]}}
+
+        lxeval "@.a/b.c" ?? {:Loc /*=[(Loc.property, ~a),
+                                      (Loc.element, ~b),
+                                      (Loc.property, ~c)]}
+
+        lxeval "@/.a/b.c" ?? {:Loc /*=[(Loc.property, ~a),
+                                       (Loc.element, ~b),
+                                       (Loc.property, ~c)]
+                                       & it.isAbsolute()}
+
+        lxeval '@.a/b."with spaces!"' ?? {:Loc /*=[(Loc.property, ~a),
+                                                   (Loc.element, ~b),
+                                                   (Loc.property, devlogix.Symbol "" "with spaces!")]}
+        
+        stdenv/x = ~foo
+
+        lxeval "@.a.(x)" ?? {:Loc /*=[(Loc.property, ~a),
+                                      (Loc.property, ~foo)]}
+
+    # }}}
+
+    # {{{ deftest stringInterpolation:
+    deftest stringInterpolation:
+
+        stdenv/x = "foo"
+        
+        lxeval 'D["$x"]' /0 ?= "foo"
+        lxeval 'D["abc $x def"]' /0 ?= "abc foo def"
+        lxeval 'D["four threes are $(4*3)"]' /0 ?= "four threes are 12"
+        lxeval 'D["blah \$x"]' /0 ?= 'blah $x'
+    # }}}
+        
+

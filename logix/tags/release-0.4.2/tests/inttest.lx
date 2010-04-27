@@ -1,0 +1,117 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# {{{ init
+setlang logix.stdlang
+
+import re
+import itertools
+import new
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+    def debugmode x:
+
+limport ltest.testlang
+setlang testlang.testlang
+
+import devlogix
+# }}}
+
+defsuite main:
+
+    debugmode 0
+    
+    if not hasattr devlogix 'baselang':
+        devlogix.init()
+    
+    base = devlogix.baselang.__impl__
+    base.clearBlockCache()
+    
+
+    defgroup cache:
+
+        # {{{ deftest sametwice:
+        deftest sametwice:
+            src = "print 1"
+            base.parse src
+            base.parse src ?? {:list}
+            
+
+            src = """
+                do:
+                    while foo:
+                        print abc
+                        if x: 1
+                        else: 2
+                        if y:
+                            1
+                        else:
+                            2
+                    a = b + c
+                """
+            base.parse src
+            base.parse src ?? {:list}
+        # }}}
+            
+        # {{{ deftest simple:
+        deftest simple:
+
+            base.parse """
+                do:
+                    print 1
+                    print 2
+                """
+            base._blockCache.has_key """
+                    print 1
+                    print 2\n"""/[1:] ?
+
+            src = base.parse """
+                while 1:
+                    print 1
+                print 2
+                """
+            src ?? {:list}
+        # }}}
+
+        # {{{ deftest blankline:
+        deftest blankline:
+
+            base.parse """
+                do:
+
+                    print 1
+
+                    print 2
+                """
+            base._blockCache.has_key """
+                    print 1
+
+                    print 2\n"""/[1:] ?
+
+            src = base.parse """
+                while 1:
+
+                    print 1
+                print 2
+                """
+            src ?? {:list}
+        # }}}
+    

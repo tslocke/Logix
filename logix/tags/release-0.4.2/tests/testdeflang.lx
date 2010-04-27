@@ -1,0 +1,172 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# {{{ init
+setlang logix.stdlang
+
+import re
+import itertools
+import new
+import compiler
+
+from logix.util import debugmode, debug
+
+limport ltest.testlang
+setlang testlang.testlang
+
+import devlogix
+from devlogix import rootops, parser, language
+# }}}
+
+deftests:
+
+    if not hasattr devlogix 'baselang':
+        devlogix.init()
+
+    testmodule = new.module('testmodule')
+    devlogix.lmodules:['testmodule'] = testmodule
+            
+    lang = language.Language 'test' parent=devlogix."deflang"
+    lang.module = 'testmodule'
+    testmodule.test = lang
+
+    stdenv=['__currentlang__':lang,
+            '__name__':'testmodule',
+            'lang':lang]
+
+    # {{{ def lxeval src env=None:
+    def lxeval src env=None:
+        env = env or stdenv
+        code = lang.parse src execenv=env
+        language.eval code:[0] env
+    # }}}
+
+    # {{{ def lxexec src env=None:
+    def lxexec src env=None:
+        env = env or stdenv
+        lang.parse src execenv=env
+    # }}}
+
+    # {{{ def oppatt synpatt:
+    def oppatt synpatt:
+        {:language.OperatorType __syntax__=synpatt}
+    # }}}
+
+    # {{{ defgroup defop_:
+    defgroup defop_:
+        
+        # {{{ deftest basics:
+        deftest basics:
+            lxeval "defop 0 expr '+' expr"
+            lang.getOp '+' ?? oppatt {:* token='+' assoc='left'}
+
+            lxeval "defop r 0 expr '-' expr"
+            lang.getOp '-' ?? oppatt {:* assoc='right'}
+
+            lxeval "defop l 0 'foo'"
+            lang.getOp 'foo' ?? oppatt {:* assoc='left'}
+
+            lxeval "defop list 0 'foo'"
+            lang.getOp 'foo' ?? oppatt {:* assoc='list'}
+
+            lxeval "defop smartspace 0 'foo'"
+            lang.getOp 'foo' ?? oppatt {:* smartspace?}
+
+            lxeval "defop 0 expr 'foo'"
+            lang.getOp 'foo' ?? oppatt {:* leftRule={:parser.ExpressionRule}
+                                           rightRule=None}
+
+            lxeval "defop 0 'foo' expr"
+            lang.getOp 'foo' ?? oppatt {:* leftRule=None
+                                           rightRule={:parser.ExpressionRule}}
+        # }}}
+
+        # {{{ deftest impArgs:
+        deftest impArgs:
+            import inspect
+            def getargs f: inspect.getargs f.func_code
+            
+            lxeval "defop 0 'foo' func a b: 0"
+            getargs (lang.getOp 'foo' .func) ?? {:* ['a', 'b'] None None}
+
+            lxeval "defop 0 'foo' macro a b: 0"
+            getargs (lang.getOp 'foo' .macro) ?? {:* ['a', 'b'] None None}
+
+            lxeval "defop 0 'foo' func a=1 b=2 *args **kws: 0"
+            op = lang.getOp 'foo'
+            getargs op.func ?? {:* ['a', 'b'] 'args' 'kws'}
+            op.func.func_defaults ?? {:* 1 2}
+        # }}}
+
+        # {{{ deftest execImp:
+        deftest execImp:
+            lang.defaultOp = logix.ltup
+            lxeval "defop 0 expr '+' expr func a b: a b"
+            lxeval "10 + 11" ?? {:* 10 11}
+
+            lxeval "defop 0 expr '++' macro x: x"
+            lxeval "5++" ?= 5
+        # }}}
+    # }}}
+
+    # {{{ defgroup deflang_:
+    defgroup deflang_:
+
+        # {{{ deftest basics:
+        deftest basics:
+            lxeval "deflang foo"
+            stdenv:['foo'] ?? {:language.Language name='foo'}
+
+            lxeval "deflang baa(foo)"
+            stdenv:['baa'] ?? {:language.Language name='baa' parent=(stdenv:['foo'])}
+        # }}}
+
+        deftest withDefop:
+
+            lxexec """
+                deflang foo
+
+                defop 0 "myop"
+                """
+
+            lang.getOp "myop" ?= None
+            stdenv:['foo'].getOp "myop" ?? {:language.OperatorType}
+    # }}}
+
+    # {{{ defgroup setlang_:
+    defgroup setlang_:
+
+        deftest basics:
+
+            lxexec """
+                deflang foo
+                setlang lang
+                defop 0 "langop"
+                setlang foo
+                defop 0 "fooop"
+                """
+
+            lang.getOp "langop" ?? {:language.OperatorType}
+            lang.getOp "fooop" ?= None
+            stdenv:['foo'].getOp "langop" ?= None
+            stdenv:['foo'].getOp "fooop" ?? {:language.OperatorType}
+    # }}}
+        
+    del devlogix.lmodules:['testmodule']
+     

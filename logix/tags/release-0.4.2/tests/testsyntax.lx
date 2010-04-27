@@ -1,0 +1,883 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# {{{ imports
+setlang logix.stdlang
+
+import re
+import itertools
+import new
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+    def debugmode x:
+
+limport ltest.testlang
+setlang testlang.testlang
+
+import devlogix
+from devlogix import parser, language, rootops, pycompile
+# }}}
+
+defsuite main:
+
+    debugmode 0
+
+    # {{{ defgroup rules:
+    defgroup rules:
+        
+        syntaxlang = rootops.makeSyntaxlang None ''
+        pycompile.installRootopCompilers()
+
+        # {{{ def stringTokenizer s lang:
+        def stringTokenizer s lang:
+            import StringIO
+            toks = parser.Tokenizer()
+            toks.setInput (StringIO.StringIO s) '<string>'
+            toks.startLanguage lang
+            toks.startBlock()
+            toks
+        # }}}
+
+        # {{{ def evalrule src:
+        def evalrule src:
+            env = [:]
+            devlogix.eval (syntaxlang.__impl__.parse src /0) env
+        # }}}
+
+        # {{{ def langForRule rule:
+        def langForRule rule:
+            l = language.Language 'test' .__impl__
+            for tok in rule.allLiterals():
+                l.addToken(tok)
+            l
+        # }}}
+
+        # {{{ def testrule rule src:
+        def testrule rule src:
+            lang = langForRule rule
+            toks = stringTokenizer src lang
+            final = toks.finalTerminator
+            toks.startLanguage lang
+            def terminator op=None pb=None:
+                final() or toks.nextToken() isa parser.LayoutToken
+            rule.parse toks terminator None
+        # }}}
+
+        # {{{ deftest choice:
+        deftest choice:
+            rule = evalrule "expr $val:('=' expr | '?' <1>)"
+
+            testrule rule '1 = 2' ?? {:* 1 ('val', 2)}
+            testrule rule '1?' ?? {:* 1 ('val', 1)}
+        # }}}
+    # }}}
+
+    # {{{ defgroup language:
+    defgroup language:
+        
+        # {{{ rule shortcuts
+        Seq = parser.SequenceRule
+        Choice = parser.ChoiceRule
+        Lit = parser.LiteralRule
+        Opt = parser.Opt
+        Named = parser.NamedRule
+        Rep = parser.Rep
+        Rep1 = parser.Rep1
+        Expr = parser.ExpressionRule
+        Optext = parser.OptextRule
+
+        expr = parser.ExpressionRule()
+        block = parser.BlockRule()
+        term = parser.TermRule()
+        symbol = parser.SymbolRule()
+        # }}}
+
+        # {{{ lang = 
+        lang = language.Language 'test'
+        class Call(language.BaseOperator):
+            
+            __syntax__ = parser.OperatorSyntax "CALL" 100 (expr, Rep1(term))
+                                               assoc='right'
+
+            __language__ = lang
+            
+        lang.__impl__.continuationOp = Call
+        # }}}
+
+        def doit s: lang.__impl__.parse s /0
+
+        # {{{ def addOp token binding lrule rrule assoc=None smartspace=None:
+        def addOp token binding lrule rrule assoc=None smartspace=None addto=None:
+            addto = addto or lang
+            syn = parser.OperatorSyntax token binding (lrule, rrule)
+                                        assoc=assoc smartspace=smartspace
+            op = new.classobj ("Op[%s]" % token)
+                              (language.BaseOperator,)
+                              ['__syntax__':syn]
+            addto.__impl__.addOp op
+        # }}}
+
+        # {{{ operators and symbols
+        p = addOp '(' 0 None (Seq expr (Lit ')'))
+
+        star = addOp '*' 95 expr expr
+        plus = addOp '+' 90 expr expr
+        eq = addOp '=' 50 expr expr
+
+        dcolon = addOp '::' 105 (Opt expr) expr
+
+        eqeq = addOp '==' 60 expr expr
+        noteq = addOp '!=' 60 expr expr
+
+        dollar = addOp '$' 110 None (Opt expr)
+        notop = addOp 'not' 80 None expr
+
+        brace = addOp '{' 0 None (Seq expr (Lit '}'))
+
+        f = ~f
+        g = ~g
+        a = ~a
+        b = ~b
+        c = ~c
+        ln = ~'len'
+        # }}}
+
+        # {{{ deftest plain:
+        deftest plain:
+            t = doit 'a b a' 
+            t ?? {:Call a b a}
+
+            t = doit "1 1 (2 3) 4 ( ( 5 ) 6 )"
+            t ?? {:Call 1 1 {:p {:Call 2 3}} 4 {:p {:Call {:p 5} 6}}}
+        # }}}
+
+        # {{{ deftest infix :
+        deftest infix:
+            t = doit "1 + 2"
+            t ?? {:plus 1 2}
+
+            t = doit "1 * 2 + 3"
+            t ?? {:plus {:star 1 2} 3}
+
+            t = doit("1 * (2 + 3)")
+            t ?? {:star 1 {:p {:plus 2 3}}}
+
+
+            t = doit "f 2 + g 4"
+            t ?? {:plus {:Call f 2} {:Call g 4}}
+
+            t = doit "f 1 + g 2 * f 3"
+            t ?? {:plus {:Call f 1}
+                        {:star {:Call g 2} {:Call f 3}}}
+
+            t = doit("1 + (f 2)")
+            t ?? {:plus 1 {:p {:Call f 2}}}
+
+            t = doit("1 + (f 2) * 3")
+            t ?? {:plus 1 {:star {:p {:Call f 2}} 3}}
+
+            t = doit "a = print stuff (1+2)"
+            t ?? {:eq a {:Call ~'print' ~stuff {:p {:plus 1 2}}}}
+
+            t = doit 'len a::2'
+            t ?? {:Call ln {:dcolon a 2}}
+
+            t = doit('len (::2)')
+            t ?? {:Call ln {:p {:dcolon 2}}}
+
+            # mising LHS
+            addOp '**' 0 expr expr
+            doit '** 11' ?raises {:SyntaxError}
+
+            # names
+            xx = addOp 'xx' 0 (Named 'a' expr) (Named 'b' expr)
+            t = doit '1 xx 2'
+            t ?? {:xx /a=1 /b=2}
+        # }}}
+
+        # {{{ deftest prefix :
+        deftest prefix:
+            t = doit "f $2 3"
+            t ?? {:Call f {:dollar 2} 3}
+
+            t = doit "1+$2"
+            t ?? {:plus 1 {:dollar 2}}
+
+            t = doit "a = not 1 + 2"
+            t ?? {:eq a {:notop {:plus 1 2}}}
+
+            ifop = addOp 'if' 10 None expr
+
+            t = doit 'a = fn 1 if len b'
+            t ?? {:eq a {:Call ~fn 1 {:ifop {:Call ln b}}}}
+
+            starstar = addOp '**' 0 None term
+            t = doit '**a'
+            t ?? {:starstar a}
+
+            addOp 'breakme' 0 None (Seq (Lit 'a') (Lit 'b'))
+            doit '** breakme b' ?raises {:SyntaxError}
+            # }}}
+
+        # {{{ deftest postfix :
+        deftest postfix:
+            q = addOp '?' 150 expr None
+
+            t = doit 'a?'
+            t ?? {:q a}
+
+            t = doit 'len a? * 10'
+            t ?? {:star {:Call ln {:q a}} 10}
+
+            qq = addOp '??' 50 expr None
+
+            t = doit 'len a ?? * 10'
+            t ?? {:star {:qq {:Call ln a}} 10}
+        # }}}
+
+        # {{{ deftest withParens :
+        deftest withParens:
+            t = doit 'a * (b + a)'
+            t ?? {:star a {:p {:plus b a}}}
+        # }}}
+
+        # {{{ deftest associativity:
+        deftest associativity:
+            bang = addOp "!" 90 None expr
+
+            t = doit 'a + !b'
+            t ?? {:plus a {:bang b}}
+
+            t = doit 'a + b + f'
+            t ?? {:plus {:plus a b} f}
+
+            pipe = addOp '|' 50 expr expr assoc='right'
+
+            t = doit 'a | b | f'
+            t ?? {:pipe a {:pipe b f}}
+        # }}}
+
+        # {{{ deftest sequenceOp
+        deftest sequenceOp:
+            rule = Seq expr (Lit ':') expr
+            qc = addOp '?' 50 expr rule 'right'
+
+            # {{{ basics
+            # expr "?" expr ":" expr
+            t = doit 'a ? b : f'
+            t ?? {:qc a b f}
+
+            doit 'a ? b : f : g' ?raises {:SyntaxError}
+
+            t = doit 'a ? f : b ? g : f'
+            t ?? {:qc a f {:qc b g f}}
+
+            t = doit 'fun a ? a + b : f * g'
+            t ?? {:qc {:Call ~fun a} {:plus a b} {:star f g}}
+            # }}}
+
+            # {{{ override literal
+            rule = Seq expr (Lit ':') expr
+            pipe = addOp '|' 60 expr rule 'right'
+
+            t = doit 'a ? (b | c : f) : g'
+            t ?? {:qc a {:p {:pipe b c f}} g}
+
+            t = doit 'a ? b | c : f : g'
+            t ?? {:qc a {:pipe b c f} g}
+            # }}}
+
+            # {{{ rep
+            # "list" expr ("," expr)*
+            rule = Seq expr (Rep (Seq (Lit ',') expr))
+            listop = addOp 'list' 20 None rule
+
+            t = doit 'list 1'
+            t ?? {:listop 1}
+
+            t = doit 'list 1,2'
+            t ?? {:listop 1 2}
+
+            t = doit 'list 1,2,3'
+            t ?? {:listop 1 2 3}
+
+            t = doit 'list 1+2, 3+4, 5'
+            t ?? {:listop {:plus 1 2} {:plus 3 4} 5}
+            # }}}
+
+            xop = addOp 'x' 0 None
+                        (Seq (Opt (Seq (Lit ':') expr) None)
+                             (Seq (Lit '!') expr))
+
+            t = doit 'x : 1 ! 2'
+            t ?? {:xop 1 2}
+
+            t = doit 'x ! 2'
+            t ?? {:xop None 2}
+
+            yop = addOp 'y' 20 None (Seq expr (Opt (Lit "!") None))
+
+            x = doit "y 1"
+            x ?? {:yop 1 None}
+
+            x = doit "y 1 !"
+            x ?? {:yop 1 '!'}
+
+            semi = addOp ';' 10 expr expr
+            x = doit "y 1 ; y 2"
+            x ?? {:semi {:yop 1 None} {:yop 2 None}}
+        # }}}
+
+        deftest symbols:
+            foo = addOp 'foo' 0 None (Seq (Rep1 symbol) (Lit "end"))
+
+            doit 'foo a end' ?? {:foo 'a'}
+            doit 'foo a b end' ?? {:foo 'a' 'b'}
+            doit 'foo end' ?raises {:SyntaxError}
+        
+        # {{{ deftest operatorAsParam:
+        deftest operatorAsParam:
+            t = doit('map ($) stuff')
+            t ?? {:Call ~map {:p {:dollar}} ~stuff}
+        # }}}
+
+        # {{{ deftest brokenParen:
+        deftest brokenParen:
+            doit "{x" ?raises {:SyntaxError}
+            doit "{x\n}" ?raises {:SyntaxError}
+        # }}}
+
+        # {{{ defgroup languages:
+        defgroup languages:
+            l = language.Language 'arglang'
+            l.defaultOp = Call
+            lstar = addOp '*' 150 None expr addto=l
+            lexpr = Expr l
+            testlang = addOp 'testlang' 10 None lexpr
+
+            deftest prefix:
+                t = doit 'testlang *2'
+                t ?? {:testlang {:lstar 2}}
+
+                t = doit '3 * (testlang *2)'
+                t ?? {:star 3 {:p {:testlang {:lstar 2}}}}
+
+            deftest infix:
+                testlang2 = addOp 'testlang2' 10 expr lexpr
+
+                t = doit 'a * b testlang2 *c'
+                t ?? {:testlang2 {:star a b} {:lstar c}}
+
+            deftest tokens:
+                plusdollar = addOp "+$" 50 None expr addto=l
+
+                x = doit "f 1+$2"
+                x ?? {:plus {:Call f 1} {:dollar 2}}
+
+                x = doit "testlang f 1+$2"
+                {:testlang {:Call f 1 {:plusdollar 2}}}
+
+            deftest misc:
+                tilde = addOp "~" 50 None expr addto=l
+                x = doit "testlang ~ 1"
+                x ?? {:testlang {:tilde 1}}
+
+            deftest binding:
+                # l* parses its rhs in arglang, and binds tighter than a +
+                lstar = addOp "l*" 95 expr lexpr
+
+                # but this + binds tighter still
+                lplus = addOp "+" 96 expr expr addto=l
+
+                x = doit "1 l* 2 + 3"
+                x ?? {:lstar 1 {:lplus 2 3}}
+
+            deftest nestedLanguageError:
+                l.__impl__.continuationOp = Call
+
+                foo = addOp "foo" 0 None (Lit "baa") addto=l
+
+                # The missing 'baa' ends the testlang operand, and \foo
+                # becomes just a symbol
+                doit "testlang a b foo b" ?? {:Call}
+
+            deftest outerLanguage:
+                out = addOp "out" 0 None (Expr "^") addto=l
+
+                doit "testlang * out 1 * 2"
+                    ?? {:testlang {:lstar {:out {:star 1 2}}}}
+                
+        # }}}
+
+        # {{{ deftest block
+        deftest block:
+            b = addOp 'b' 50 None block
+            nameb = addOp 'nb' 50 None (Named 'body' block)
+
+            t = doit("""
+            b
+             1
+            """)
+            t ?? {:b 1}
+
+            t = doit("""
+            b
+             1
+             b 2
+               b 3
+                 4
+             5
+            """)
+            t ?? {:b 1 {:b 2 {:b 3 4}} 5}
+
+            t = doit("""
+            nb
+             1""")
+
+            t ?? {:nameb /body=[1]}
+
+            t = doit("""
+                b
+                 1 + 2
+                 3
+                """)
+            t ?? {:b {:plus 1 2} 3}
+        # }}}
+
+        # {{{ deftest tightBinding :
+        deftest tightBinding:
+            at = addOp '@' 110 None expr
+            pp = addOp '++' 120 expr expr
+
+            t = doit '@ 1 ++ 2'
+            t ?? {:at {:pp 1 2}}
+        # }}}
+
+        # {{{ def test brokenChoice :
+        deftest brokenChoice:
+            starstar = addOp "**" 0 None (Choice (Lit 'a') (Lit 'b'))
+
+            x = doit "** a"
+            x ?? {:starstar}
+
+            doit "** c" ?raises {:SyntaxError}
+        # }}}
+
+        # {{{ deftest unexpectedOperator:
+        deftest unexpectedOperator:
+            starstar = addOp "**" 0 None (Choice expr (Lit ":-:"))
+            x = doit "** :-:"
+            x ?? {:starstar}
+        # }}}
+
+        # {{{ defgroup optional:
+        defgroup optional:
+
+            deftest basics:
+                op = addOp "**" 0 None (Seq expr
+                                           (Opt (Seq (Lit '[') expr (Lit ']')) None)
+                                           (Lit ':'))
+
+                x = doit "** 1 :"
+                x ?? {:op 1 None}
+
+                x = doit "** 1 [2] :"
+                x ?? {:op 1 2}
+
+                doit "** 1 [ 2 :" ?raises {:SyntaxError}
+        # }}}
+        
+        # {{{ deftest smartspace:
+        defgroup smartspace:
+            # Informal rule:
+            # Insert brackets around the packed expression, but only
+            # If the resulting expression is valid, if not, do nothing
+
+            # {{{ deftest prefix:
+            deftest prefix:
+                dollar = addOp "$" 50 None expr smartspace=True
+                doit "$ a b" ?? {:dollar {:Call ~a ~b}}
+                doit "$a b"  ?? {:Call {:dollar ~a} b}
+
+                dollar = addOp "$" 50 None (Opt expr) smartspace=True
+                doit "$ a b" ?? {:Call {:dollar} ~a ~b}
+                doit "$a b"  ?? {:Call {:dollar ~a} b}
+            # }}}
+
+            # {{{ deftest postfix:
+            deftest postfix:
+                inc = addOp "++" 50 expr None smartspace=True
+                doit "a b ++" ?? {:inc {:Call ~a ~b}}
+                doit "a b++" ??  {:Call ~a {:inc ~b}}
+
+                inc = addOp "++" 50 (Opt expr) None smartspace=True
+                doit "a b ++" ?? {:Call ~a ~b {:inc}}
+                doit "a b++" ??  {:Call ~a {:inc ~b}}
+            # }}}
+
+            # {{{ deftest infix:
+            deftest infix:
+            
+                plus = addOp "+" 50 expr expr smartspace=True
+                normal = {:plus 1 {:star 2 3}}
+                doit "1 + 2 * 3" ?? normal
+                doit "1+ 2 * 3"  ?? normal
+                doit "1 +2 * 3"  ?? normal
+                doit "1+2 * 3"   ?? {:star {:plus 1 2} 3}
+            
+                plus = addOp "+" 50 (Opt expr None) expr smartspace=True
+                normal = {:plus 1 {:star 2 3}}
+                doit "1 + 2 * 3" ?? normal
+                doit "1+ 2 * 3"  ?? normal
+                doit "f +2 * 3"  ?? {:star {:Call ~f {:plus None 2}} 3}
+                doit "1+2 * 3"   ?? {:star {:plus 1 2} 3}
+
+                plus = addOp "+" 50 expr (Opt expr None) smartspace=True
+                normal = {:plus 1 {:star 2 3}}
+                doit "1 + 2 * 3" ?? normal
+                doit "1+ 2 * 3"  ?? {:star {:Call {:plus 1 None} 2} 3}
+                doit "1 +2 * 3"  ?? normal
+                doit "1+2 * 3"   ?? {:star {:plus 1 2} 3}
+
+                plus = addOp "+" 50 (Opt expr None) (Opt expr None) smartspace=True
+                doit "1 + 2 * 3" ?? {:star {:Call 1 {:plus None None} 2} 3}
+                doit "1+ 2 * 3"  ?? {:star {:Call {:plus 1 None} 2} 3}
+                doit "f +2 * 3"  ?? {:star {:Call ~f {:plus None 2}} 3}
+                doit "1+2 * 3"   ?? {:star {:plus 1 2} 3}
+            # }}}
+
+            # {{{ deftest complexRight:
+            deftest complexRight:
+                # When rhs is not one of: term, exp, [term] or [expr]
+                # it is always assumed to be packed
+            
+                brk = addOp "[" 50 expr (Seq expr (Lit "]")) smartspace=True
+                doit "f a[1]" ??  {:Call ~f {:brk ~a 1}}
+                doit "f a [1]" ?? {:brk {:Call ~f ~a} 1}
+
+                brk = addOp "[" 50 (Opt expr None) (Seq expr (Lit "]"))
+                            smartspace=True
+                doit "f a[1]"  ?? {:Call ~f {:brk ~a 1}}
+                doit "f a [1]" ?? {:Call ~f ~a {:brk None 1}}
+            # }}}
+
+            deftest chain:
+                dot = addOp "." 90 expr term smartspace=True
+                #smartspace should have no effect here
+                doit "f x .foo.baa" ?? {:dot {:dot {:Call ~f ~x} ~foo} ~baa}
+        # }}}
+
+        # {{{ defgroup controlStructures:
+        defgroup controlStructures:
+            ifop = addOp 'if' 10 None
+                                 (Seq (Named 'test' expr)
+                                      (Lit ':')
+                                      (Named 'body' block)
+                                      (Named '_else' (Opt (Seq (Lit 'else')
+                                                               block))))
+
+            whileop = addOp 'while' 10 None
+                                       (Seq (Named 'test' block)
+                                            (Lit ':')
+                                            (Named 'body' block))
+            semi = addOp ';' 20 expr expr
+
+            prn = ~'print'
+
+            # {{{ deftest some:
+            deftest some:
+
+                t = doit """
+                    if foo a b:
+                      print f
+                      print g
+                    """
+                t ?? {:ifop /test={:Call ~foo a b} /body=[{:Call prn f},
+                                                          {:Call prn g}]}
+
+                t = doit 'if a + foo b: print $blah'
+                t ?? {:ifop /test={:plus a {:Call ~foo b}}
+                            /body=[{:Call prn {:dollar ~blah}}]}
+
+                t = doit"""
+                    while line = readline; line != null:
+                        print line
+                        i = i + 1
+                    """
+                t ?? {:whileop /test=[{:semi {:eq ~line ~readline}
+                                             {:noteq ~line ~null}}]
+                               /body=[{:Call prn ~line},
+                                      {:eq ~i {:plus ~i 1}}]}
+
+                t = doit """
+                    if foo a b:
+                        print f
+                        print g
+                      else
+                        print c
+                    """
+                t ?? {:ifop /test={:Call ~foo a b}
+                            /body=[{:Call prn f}, {:Call prn g}]
+                            /_else=[{:Call prn c}]}
+
+                t = doit 'if foo a: print 1 else print 2'
+                t ?? {:ifop /test={:Call ~foo a}
+                            /body=[{:Call prn 1}]
+                            /_else=[{:Call prn 2}]}
+            # }}}
+
+            # {{{ deftest somemore :
+            deftest somemore:
+                t = doit """
+                    while running: x = max 1
+                                           (min a b)
+                                           2
+                    """
+                t ?? {:whileop /test=[~running]
+                               /body=[{:eq ~x {:Call ~max 1
+                                                          {:p {:Call ~min a b}}
+                                                          2}}]}
+
+                t = doit """
+                    while running:
+                      x = max
+                        1
+                        (min a b)
+                        2
+                      print x
+                    """
+                t ?? {:whileop /test=[~running]
+                               /body=[{:eq ~x {:Call ~max 1
+                                                          {:p {:Call ~min a b}}
+                                                          2}},
+                                      {:Call prn ~x}]}
+
+
+                doit """
+                    while line = readline stdin
+                          line != none:
+                        print line
+                    """ ?raises {:SyntaxError}
+
+                t = doit """
+                    while line = readline stdin
+                          line != none
+                        :
+                        print line
+                    """
+                t ?? {:whileop /test=[{:eq ~line {:Call ~readline ~stdin}},
+                                      {:noteq ~line ~none}]
+                               /body=[{:Call prn ~line}]}
+
+                doit """
+                    while
+                        line = readline stdin
+                        line != none
+                        :
+                        print line
+                    """ ?raises {:SyntaxError}
+            # }}}
+        # }}}
+
+        # {{{ deftest lowBindingPrefix:
+        deftest lowBindingPrefix:
+            ddollar = addOp "$$" 50 None expr
+            doit "1 * $ 2 + 3" ?? {:plus {:star 1 {:dollar 2}} 3}
+            doit "1 * $$ 2 + 3" ?? {:star 1 {:ddollar {:plus 2 3}}}
+        # }}}
+
+        # {{{ deftest freetext:
+        deftest freetext:
+            q = addOp '"' 50 None (Seq (parser.FreetextRule '[^"]*' False)
+                                       (Lit '"'))
+            doit '"abc"' ?? {:q "abc"}
+            doit '"\n  abc"' ?raises {:SyntaxError}
+
+            starq = addOp '**' 0 None (Rep (parser.FreetextRule ".+" False))
+            doit "** abc" ?? {:starq /*=[" abc"]}
+            doit "**" ?? {:starq /*=[]}
+
+            doit """
+                ** abc
+                   def
+                x
+                """
+                ?? {:starq /*=[" abc", "def"]}
+
+            qq = addOp "qq" 0 None (parser.FreetextRule ".*" False)
+            doit "qq\nx" ?? {:qq ""}
+        # }}}
+        
+        # {{{ deftest optext:
+        deftest optext:
+            l = language.Language 'textlang'
+            brace = addOp '{' 0 None (Seq expr  (Lit "}")) addto=l
+            arrow = addOp '>>>' 0 None (Expr lang) addto=l
+            textop = addOp 'text' 0 None (Optext "END" l)
+
+            doit "text ho hum END" ?? {:textop " ho hum "}
+
+            doit "text foo {123} baa END" ?? {:textop " foo " {:brace 123} " baa "}
+
+            doit """
+               text
+               Hey -
+                 literate programming!
+               >>> 1 + 2
+                     + 3
+               Not bad eh? END
+               """ ?? {:textop /0=/Hey/
+                               /1={:arrow {:plus {:plus 1 2} 3}}
+                               /2=/Not bad/}
+        # }}}
+    # }}}
+
+    # {{{ defgroup withdefop:
+    defgroup withdefop:
+
+        # {{{ vars and funcs
+        quotelang = rootops.makeQuotelang None ''
+        syntaxlang = rootops.makeSyntaxlang quotelang ''
+        langlang = rootops.makeLangLang syntaxlang quotelang ''
+
+        lang = language.Language 'test' langlang '__main__'
+        env = dict __name__='__main__' test=lang
+        
+        def eval src language=None:
+            language = language or lang
+            language.__impl__.parse src mode='exec' execenv=env
+
+        def parse src:
+            lang.__impl__.parse src /0
+
+        def op token:
+            lang.__impl__.getOp token
+        # }}}
+
+        # {{{ deftest prnt:
+        deftest prnt:
+            eval """
+                defop 15 "print" ( <tofile> ">>" expr [("," expr)+ $nonl:[","]]
+                                 | <std> [expr ("," expr)* $nonl:[","]] )
+                """
+            parse "print 1" ?? {:(op 'print')}
+        # }}}
+
+        # {{{ deftest bracket:
+        deftest bracket:
+            eval """
+                defop 0 "[" expr ("," expr)* [',']/- "]"
+                """
+
+            parse "[1,2]" ?? {:(op '[') 1 2}
+            parse "[1,2,]" ?? {:(op '[') 1 2}
+
+            eval """
+                defop 0 "[" expr ("," expr)* "," "]"
+                """
+            parse "[1,2,]" ?? {:(op '[') 1 2}
+
+            
+            eval """
+                defop 0 "[" expr  $quals:("for" expr "in" expr
+                                          $ifs:("if" expr)* )+ "]"
+                """
+            parse "[x for x in y]" ?? {:(op '[') ~x /quals=[{:* ~x ~y}]}
+        # }}}
+
+        # {{{ deftest morebrackets:
+        deftest morebrackets:
+            eval """
+                defop 0 "foo" expr ":" ("/" expr)* "/"
+                """
+            parse "foo 1:/2" ?raises {:SyntaxError}
+            parse "foo 1:/2/" ?? {:(op '[') 1 2}
+            parse "foo 1:/2/3/" ?? {:(op '[') 1 2}
+        # }}}
+
+        # {{{ deftest testpattern:
+        deftest testpattern:
+            eval """
+                defop 0 "{:" $typ:("*"|term ["!"])
+                             $subtests:(  $loc:(  "/" <indexer> term
+                                                | "/*" <elems> <0>
+                                                | <field> symbol )
+                                          $val:("=" term | '?')
+                                        | term)*
+                             $obtest:["&" expr]
+                        "}"
+                defop 50 expr '+' expr
+                """
+
+            parse "{:* a+}" ?raises
+                {:SyntaxError msg=/expected expression/}
+
+            eval """defop 80 'foo' expr (',' expr)* ['!']"""
+
+            parse "foo 1, 2 + 3" ?? {:(op '+') {:(op 'foo') 1 2} 3}
+        # }}}
+
+        # {{{ deftest quote:
+        deftest quote:
+            parse """
+                `defop smartspace \\binding [expr] \\t [expr]
+                    macro lx rx: 0
+                """ ?? {:(op '`')}
+        # }}}
+
+        # {{{ deftest setlang_:
+        deftest setlang_:
+            eval "defop 0 'do' ':' block"
+
+            env/lang = lang
+            eval """
+                deflang l2(lang):
+                    defop 50 expr '+' expr
+                """
+
+            x = eval """
+               `do:
+                   setlang l2
+                   a + b
+               """
+            x/0/0/0 ?? {:* __language__=(env/l2) }
+        # }}}
+
+        # {{{ deftest blockError:
+        deftest blockError:
+
+            eval """
+                defop 0 "blk" block
+                """
+
+            # no continuation op
+            parse "blk a b" ?raises {:SyntaxError}
+        # }}}
+
+        # {{{ deftest optext:
+        deftest optext:
+            eval """
+                defop 0 "foo" optext /:/
+                """
+            parse "foo asda^%$£ :" ?? {:(op '[') " asda^%$£ "}
+        # }}}
+    # }}}
+    

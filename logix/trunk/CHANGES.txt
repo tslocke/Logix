@@ -1,0 +1,537 @@
+------0.4.2------
+
+When run within IPython, Logix will automatically disable IPython's
+autocall feature.
+
+
+------0.4.1------
+
+Bug Fix: For incompatible change in compiler.ast API
+    (Again! I don't know how this sneaked back in :-( )
+
+
+------0.4--------
+
+There a a great many changes in this release. This document only
+attempts to enumerate the changes and provide a brief overview. See
+the Logix Tutorial for more information.
+
+Parser:
+
+    Continuation operator
+
+        The parser has been made much more general through the concept
+        of the continuation operator. In short, each language can
+        define an implicit continuation operator that is used to
+        continue parsing an expression when no infix operator is
+        present to extend the expression.
+
+        In Standard Logix, the continuation operator implements the
+        function call syntax:
+
+            f arg1 arg2 name=arg3 ...
+
+        In Base Logix (Python), the continuation operator allows a
+        series of parentheses and brackets to be appended to an
+        expression to provide the function call and subscript syntax.
+
+        See the section on defining languages below for defining the
+        continuation operator.
+
+
+    Changes to the meaning of syntax-rules expr and term
+
+        A 'term' is now defined as:
+
+            - A literal number
+            - A Name
+            - An operator with no LHS, followed by its RHS
+            - A term, followed by an operator with LHS,
+                  followed by its RHS
+
+        An 'expr' is:
+
+            - The same as a term, if the language defines no
+                  continuation operator
+            - Or, a term, followed by the RHS of the continuation
+                  operator
+
+
+    Improvements to smartspace semantics
+
+        The new rules are much more reasonable, but confusion can
+        still occur when smartspace and non-smartspace operators are
+        packed together in an expression without white-space. Further
+        improvements are required.
+
+        WARNING: Code that utilizes the smartspace feature may parse
+        differently than in previous versions. In particular:
+
+            ` f \ob.attr    did parse as    ` f (\ob).attr
+                            now parses as   ` f \(ob.attr)
+
+        Instead write
+
+            ` f \ob .attr
+
+
+    String literals not hard-wired
+
+        String literals are no longer a special case in the
+        tokenizer. They can be defined as operators using the enhanced
+        free-text rule.
+
+
+    Improvements to freetext syntax-rule
+
+        The text that matches is now defined by regular expression,
+        either by specifying the regex that the free-text must match,
+        or the regex that terminates the free-text. In the latter
+        case, there is control over whether parsing resumes at the
+        terminator, or after the terminator.
+
+        Examples:
+           freetext /[a-zA-Z]*/    # parses letters as free-text
+           freetext upto /"/       # parses freetext until the first "
+
+        Note the former version will only parse free-text on the
+        current line, whereas the 'upto' version will parse any number
+        of lines until the terminator is found
+
+
+    optext syntax-rule
+
+        The optext syntax-rule is used to parse free-text, but unlike
+        freetext, the text may contain embedded operators that will be
+        parsed. This can be used, for example, to capture XML syntax,
+        to achieve literate programming, and to build text templating
+        systems. There are some restrictions on the syntax of embedded
+        operators.
+
+        Examples:
+            optext /END/    # parses op-text in the current language until END
+            optext@l /END/  # parses op-text in language l until END
+
+
+    Outer language
+
+        syntax-rules that allow a language to be specified, can now
+        specify the 'outer' language, meaning the language that was in
+        effect immediately before the current language came into
+        effect. Use ^ in place of a language in syntax-rules.
+
+        Example:
+            defop 0 "{" expr@^ "}"
+
+
+    flist data-type and operand ordering
+
+        The new data-type flist ("field list" - i.e. a list that also
+        has zero or more named fields) replaces the ltup
+        data-type. The list literal syntax in Standard Logix has been
+        extended to support flists.
+
+        This change has implications for manipulating code-data - see
+        the Macro section below.
+
+
+    symbol: syntax-rule
+        
+        Like the name-rule (e.g. $foo:expr), the "symbol:" rule is
+        attached to some other rule, and creates a named operand in
+        the code-data. The difference is that "symbol:" will first
+        parse a symbol, and use the parsed name as the name for the
+        operand. This is very useful for neatly capturing name/value
+        pairs in the code-data.
+
+        Example:
+            # A literal for dicts where the keys are names
+            # [: a=1, b=2 :]
+            defop "[:" symbol:("=" expr") ("," symbol:("=" expr"))* ":]"
+
+
+    Empty names
+
+        The named rule serves two purposes: it creates a named
+        operand, and also causes a nested flist to be created in the
+        code-data. To provide more control over the structure of
+        code-data, and empty name is now allowed. The operand remains
+        positional (i.e. it is not named), but will be a nested flist.
+
+        Examples:
+
+            # operands are all at the top level
+            defop 0 "foo" expr (":" expr)*      
+
+            # operand named x is a nested flist
+            defop 0 "foo" expr $x:(":" expr)*  
+            
+            # 2nd operand is a nested flist
+            defop 0 "foo" expr $:(":" expr)*    
+
+
+    More uses of empty trivial rule <>
+
+        The empty trivial rule can be used to suppress information in
+        the code-data. This is because literal-rules that are matched
+        in a sequence-rule are discarded. The <> rule changes the
+        simple literal-rule into a sequence rule.
+
+        Examples:
+            # If matched, 'a' will be included in the code-data
+            ["a"]/-      
+            
+            # Whether matched or not, nothing appears in the code-data
+            ["a" <>]/-
+
+        It can be used in the same way in a choice rule
+
+
+    Improved error reporting
+
+        The error reporting mechanism is greatly simplified internally
+        and is also improved. In the face of multiple errors
+        (e.g. each path of a choice failed), the error that is
+        furthest along in the source-code is reported. (i.e. the path
+        that successfully matched the most text is considered closest
+        to the users intent)
+
+
+    No more 'list' associativity
+
+        List associative operators are no longer supported. The same
+        result can be achieved by other means. Instead of
+
+            defop list 50 expr "," expr
+
+        Use
+
+            defop 50 expr "," expr ("," expr)*
+
+     
+Defining languages:
+
+    New syntax for deflang
+
+        The deflang operator is now:
+
+            "deflang" <name> [ "(" <base-language> ")" ] ":" <block>
+
+        The block may contain defops, and these define the operators
+        of the language. This is the only place where defops are valid
+        other than at the top-level. The name of the language is bound
+        to a logix.Language object, and any other variables created in
+        the block will be attributes of that object, thus the deflang
+        body is a convenient place to define support functions for the
+        operators.
+
+        There is no longer an implicit change of language with the
+        deflang. The language for the body of the deflang is just the
+        current language. The deflang body may contain setlangs,
+        including a setlang to the one under creation. This changes
+        the implementation language, but defined operators still
+        belong to the language created by the deflang. One advantage
+        of this approach is that it is now possible to define
+        languages that do not themselves inherit deflang, setlang and
+        defop. E.g. an application may provide a domain specific
+        scripting language that does not itself include language
+        extension features.
+
+        Example:
+
+            deflang foo(logix.stdlang):
+                defop ...             # add an op to foo
+
+                def supportFunc ...   # define a support func
+                                      # can be called in operator code
+                                      # as foo.supportFunc
+
+                setlang someLanguage  # switch implementation language
+
+                defop ...             # ops are still added to foo
+       
+
+    Forward language declarations
+
+        An empty deflang can be used as a forward declaration to allow
+        circular dependencies between languages. The forward
+        declaration and actual declaration must be consistent with
+        regard to the base-language.
+
+        Example:
+            deflang b: # forward declaration
+
+            deflang a(b):
+                ...
+
+            deflang b:
+                ...
+                defop 0 "foo" expr@a
+                
+
+    Scope of operators definitions
+
+        defops within a deflang body create operators that become part
+        of that language. defops at the top-level of a module are
+        temporary -- just for use in that module. Note that a
+        top-level setlang will cause temporary operators to be lost.
+
+
+    getops
+
+        The getops operator provides an alternative to language
+        inheritance for the re-use of existing operators. It can be
+        used wherever a defop is valid, and imports operators from
+        some other language.
+
+        The operators to be imported are listed. If no operators are
+        listed, all operators from the language are imported.
+
+        Example:
+            deflang mybase(logix.baselang):
+                getops logix.stdlang, isa { [ *> do
+                getops foolang    # import all ops from foolang
+
+
+    Continuation operator
+
+        To define the continuation operator for a language, define an
+        operator "__continue__" in the usual manner. It must be
+        defined as a prefix operator.
+
+        Example:
+            deflang foo:
+                defop 100 "__continue__" ...
+
+
+    LanguageImpl objects
+
+        To allow Language objects to freely contain user-defined
+        attributes (e.g. operator support functions), the methods of
+        the Language class have been moved into the class
+        LanguageImpl. The Language object contains a field __impl__
+        which references this object.
+          
+
+    parse method
+
+        The method LanguageImpl.parse (formerly Language.parse) has a
+        new parameter "mode", which replaces the parameters "expand"
+        and "result".
+
+
+Macros:
+    
+    Macro context
+
+        Macro expansion may sometimes be dependent on the context of
+        the macro. The is now helpful support for this situation. If a
+        macro defines an argument __context__, it will be passed the
+        macro context object. This is a simple container in which
+        named values can be stored. If a macro sets a value, that
+        value will be available to any sub-macros contained in the
+        operands (unless shadowed by a nested macro that sets a new
+        value with the same name). To avoid name collisions, the
+        context is module specific - values can only be accessed when
+        set by other macros from the same module.
+
+        This feature is used by the valfor/breakwith operators in
+        Standard Logix.
+
+
+    Local-module-escape
+
+        The code that a macro expands to often needs access to values
+        in the defining module. This is now accomplished with the
+        local-module-escape. "\@" creates a reference to the
+        macro-defining module, in the expanded code.
+
+        Example:
+            import re
+            deflang relang:
+                defop 0 "regex" symbol ":" freetext /.*/
+                    macro name r: ` \name = \@.re.compile \r.strip()
+
+
+Misc:
+
+    deflang language renamed to langlang
+
+        Previously, the language that defined deflang, setlang and
+        defop was called, incredibly confusingly, deflang. It is now
+        called langlang, i.e. the language language.
+
+
+    rulelang renamed to syntaxlang
+
+        rulelang? How vague was that? 
+
+
+    (^ ... ) operator
+
+        Taking advantage of the new 'outer language' facility in the
+        parser, a standard operator (^...) can be used to embed
+        outer-language expressions in most languages. It is part of
+        langlang (which is a base language for most languages), and is
+        also added to syntaxlang.
+
+        This operator will often be useful to embed an expression from
+        your preferred general purpose language (e.g. Standard or Base
+        Logix) into some domain specific mini-language.
+
+
+    Changes to code-data api
+
+        The new flist data-type is used for all operands. Named
+        operands are now accessed as keyed items rather than
+        attributes. E.g. (in Base Logix syntax):
+ 
+            ifOp['test']
+
+        Instead of 
+
+            ifOp.test
+
+        (In fact in Standard Logix you can just write ifOp/test -- see
+        Standard Logix section below)
+    
+
+Base Logix:
+
+    Strings literal operators.
+
+        Using the free-text enhancements, Python's various flavors of
+        string operators are now supported.
+
+
+Standard Logix:
+
+    Keyword arguments.
+
+        Keywords arguments are now recognized by the continuation
+        operator, so "=" is (thankfully!) no longer a smartspace
+        operator.
+
+
+    Variable arguments.
+
+        Also thanks to the new continuation operator, the syntax for
+        passing variable arguments is now a lot more like Python.
+
+        f x y foo=10 *:varags **:kws
+
+
+    New operators:
+
+        Multi-line string literal.
+        
+            I came across this idea from Greg Ewing at
+            http://nz.cosc.canterbury.ac.nz/~greg/python/ideas.html
+            
+            Multi-line string literals that don't mess with your
+            indentation.
+
+            """|You can now write multi-line
+               |string literals like this.
+               |(the | chars on the left will not be in the string)
+               |leave a single | to terminate with a newline
+               |
+               "
+
+            The operator optionally ends with a single quote -
+            entirely superfluous, but it keeps emacs syntax
+            highlighting on track!
+
+
+        flist literals
+
+            The list literal syntax now supports named fields. If you
+            include a named field in the literal, it returns an flist,
+            otherwise it returns a regular list
+
+            [1, 2, x=10, y='foo']
+
+            (The named fields must come after the regular fields)
+
+
+        valfor/breakwith
+
+            The names of these are not very nice and liable to change,
+            but this pattern crops up quite often, so this could be
+            rather useful.
+
+                 x = valfor employee in someList:
+                         if employee and employee.salary > 10000:
+                             breakwith employee.salary
+                     else:
+                         10000
+
+
+        Infix zip operator
+
+            Code that uses zip can be quite hard to read. Maybe this
+            infix zip operator ",*" will be useful.
+
+            [salary + bonus for salary, bonus in salaries ,* bonuses]
+
+            The choice of syntax extends the theme that "*" means
+            apply-to-whole-sequence
+
+
+        Subscript operator renamed
+
+            The subscript operator is changed from
+            
+                :[ ...key-or-slice... ]
+
+            To 
+
+                /[ ...key-or-slice... ]
+
+            This is to be more consistent with the following change.
+
+
+        Subscript shorthand
+
+            The "/" character has two common uses in computing: as
+            divide, and as the path separator. Dividing is rare in
+            general purpose code, so perhaps a path separator operator
+            would be a better use of the character. In Standard Logix,
+            the divide operator is now "div":
+
+                x = y div z
+
+            Whereas "/" is a shorthand for subscripting with a name or
+            number
+
+                x = foo/baa/5/zob
+
+            Is a shorthand for
+
+                x = foo/['baa']/[5]/['zob']
+
+            In particular, this is useful for manipulating named
+            operands in code-data.
+
+
+        'star' subscripts:
+
+            Similar to ".*":
+
+                seq/*[x]    is equivalent to    [el/[x] for el in seq]
+                            (slicing also supported)
+
+                seq/*name   is equivalent to    [el/name for el in seq]
+
+
+------0.3.2------
+
+Bug fix. Incompatible api change in compiler.ast was breaking Logix in
+Python 2.4
+
+
+------0.3.1------
+
+Bug fix. Logix sometimes parsed the wrong operator when two operators:
+had the same token; but were defined in different languages; in the
+same module.

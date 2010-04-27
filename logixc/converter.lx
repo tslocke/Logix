@@ -1,0 +1,322 @@
+setlang logix.stdlang
+
+import re
+
+try:
+    from livedesk.util import debug
+except ImportError: 
+
+from livedesk.util import concat
+
+# {{{ def getLineno op:
+def getLineno op:
+    logix.getmeta op ~lineno
+# }}}
+
+# {{{ deflang templatelang(None):
+deflang templatelang(None):
+
+    defop 0 "\<" func: "<"
+    
+    defop 0 "$" ( "(" expr@^ ")"
+                | "[" expr@^ ["|" freetext /[^\]]*/ ] "]"
+                | symbol
+                )
+        func x listjoin=False:
+            if listjoin == False:
+                x
+            else:
+                if len x == 0:
+                    []
+                else:
+                    if x is None or len x == 0:
+                        []
+                    else:
+                        res = []
+                        for part in x/[:-1]:
+                            res.append part
+                            if listjoin is not None:
+                                res.append listjoin
+                        res.append x/[-1]
+                        res
+
+    defop 0 "@" symbol func x : Converter.IndentBlock x
+
+    defop 0 "<for" $place:expr@^ "in" $seq:expr@^ ">" $body:optext /<>/
+        macro place seq body:
+            `concat [\body for \place in \seq]
+
+    defop 0 "<if" $test:expr@^ ">" $body:optext /</
+                  $elifs:("elif" $test:expr@^ ">" $body:optext /</)*
+                  $else_:["else>" optext /</]
+                  ">"
+                  
+        macro test body elifs else_=None:
+            ``if test=test
+                  body=[(`[ \*body ])]
+                  elifs=[[test=e/test, body=[`[ \*e/body ]]] for e in elifs]
+                  _else=[(if else_: `[ \*else_ ] else: `[])]
+
+    defop 0 "<op>" macro: `__op__.__syntax__.token
+
+    defop 0 "<do:" $body:block@^ ">"
+        macro body:
+            `do:
+                \* body
+                []
+# }}}
+
+# {{{ class Converter:
+class Converter:
+
+    class IndentBlock(list):
+
+    # {{{ def __init__ self toplevelConverter converters:
+    def __init__ self blockConverter lineConverter converters:
+        self.blockConverter = blockConverter
+        self.lineConverter = if lineConverter:
+                                 lineConverter
+                             else:
+                                 {c x|x}
+        self.converters = converters
+    # }}}
+
+    # {{{ def test self x:
+    def test self x:
+        csrc, linemap = self.convert x
+        for i, line in enumerate csrc.splitlines():
+            print "%5s: %s" % (linemap.get (i+1) "", line)
+    # }}}
+
+    # {{{ def convert self statements:
+    def convert self statements:
+        self.lines = [] # [(line-text, src-line-num)]
+        self.lineMap = [:]
+        self.currentLine = ""
+        self.indent = ""
+        self.lineno = None
+
+        self.addBlock (self.blockConverter True statements)
+            
+        return '\n'.join (self.lines + [self.currentLine]), self.lineMap
+    # }}}
+
+    # {{{ def add self x:
+    def add self x:
+        lineno = getLineno x
+        if lineno != None:
+            oldLineno = self.lineno
+            self.lineno = lineno
+            self.lineMap/[len self.lines + 1] = lineno
+            
+        if type x isa logix.OperatorType:
+            tok = x.__syntax__.token
+            lang = x.__language__
+            conv = self.converters/[lang].get tok
+            if conv is None:
+                self.addLines ["[- no template for $tok -]"]
+            else:
+                conv self x *:x.__operands__.elems **:x.__operands__.fields
+        else:
+            self.addLines [(str x)]
+
+        if lineno != None:
+            self.lineno = oldLineno
+    # }}}
+
+    # {{{ def addLines self lines:
+    def addLines self lines:
+        if len lines == 0:
+            return
+
+        firstLine = lines/0
+        self.currentLine += firstLine
+
+        if len lines > 1:
+            self.lines.append self.currentLine
+            cline = len self.lines + 1
+            if self.lineno != None and cline not in self.lineMap:
+                self.lineMap/[cline] = self.lineno
+
+            for l in lines/[1:-1]:
+                self.lines.append (self.indent + l)
+                cline = len self.lines + 1
+                if self.lineno != None and cline not in self.lineMap:
+                    self.lineMap/[cline] = self.lineno
+            self.currentLine = self.indent + lines/[-1]
+    # }}}
+
+    # {{{ def addParts self parts:
+    def addParts self parts:
+        for part in parts:
+            if part isa! str and len part > 0:
+                lines = part.splitlines()
+                if part.endswith '\n':
+                    lines.append ""
+                self.addLines lines
+
+            elif part isa Converter.IndentBlock:
+                self.addBlock (self.blockConverter False part)
+                    
+            elif part isa logix.flist:
+                self.addParts part.elems
+
+            elif part isa list:
+                self.addParts part
+
+            else:
+                self.add part
+
+        if self.currentLine =~ /^ *$/ and len self.lines > 1:
+            self.currentLine = self.lines/[-1]
+            self.lines.pop()
+    # }}}
+
+    # {{{ def addBlock self block:
+    def addBlock self block:
+        if len block == 0:
+            return
+        
+        old = self.indent
+        self.indent = ' ' * len self.currentLine
+
+        def addOneLine line:
+            lineno = getLineno line
+            if lineno != None:
+                oldLineno = self.lineno
+                self.lineno = lineno
+                self.lineMap/[len self.lines + 1] = lineno
+                
+            self.lineConverter self line
+
+            if lineno != None:
+                self.lineno = oldLineno
+            
+        for line in block/[:-1]:
+            addOneLine line
+            self.addLines ['', '']
+
+        addOneLine block/[-1]
+        self.indent = old
+    # }}}
+
+    # {{{ def addTemplateParts self parts:
+    def addTemplateParts self parts:
+        if len parts == 0:
+            return
+            
+        if parts/0 isa str and parts/0 =~ /^ *\n/:
+            # multiline template
+            # {{{ indent = indent level as defined by posn of --- 
+            indent = do:
+                last = parts/[-1]
+                if last isa str and (m = last =~ /\n *$/; m):
+                    m.end() - m.start() - 1
+                else:
+                    0
+            # }}}
+
+            flat = []
+            def flatten l:
+                for part in l:
+                    if part isa Converter.IndentBlock:
+                        flat.append part
+                    elif part isa (list, logix.flist):
+                        flatten part
+                    elif part isa! str:
+                        if part != '':
+                            if len flat > 0 and flat/[-1] isa! str:
+                                flat/[-1] += part
+                            else:
+                                flat.append part
+                    else:
+                        flat.append part
+                        
+            flatten parts
+
+            lastNl = None
+            parts = listfor i, part in enumerate flat:
+                if part isa! str:
+                    s = if indent > 0:
+                            re.sub "\n {$indent}" '\n' part
+                        else:
+                            part
+                    s2 = re.sub r' *\- *\n' '' s
+                    if s2.find '\n' != -1:
+                        lastNl = i
+                    s2
+                else:
+                    part
+            
+            if lastNl != None:
+                # drop final newline
+                i = parts/[lastNl].rfind '\n'
+                parts/[lastNl] = parts/[lastNl]/[:i]
+
+            # drop upto leading newline
+            s = parts/0/[parts/0.find '\n' + 1:]
+            if len s == 0:
+                del parts/0
+            else:
+                parts/0 = s
+
+        self.addParts parts
+    # }}}
+# }}}
+
+# {{{ deflang convertlang:
+deflang convertlang:
+    
+    funcargs = logix.stdlang.funcargs
+    defop 0 "defconverter"
+            $name:symbol
+            ":"
+            $blockrule:("block" $toparg:symbol $linesarg:symbol ":" $body:block)
+            $linerule:["line" $arg:symbol ":" $parts:optext@templatelang /---/]
+
+            $langs:block:($lang:expr "operators:"
+                          $defs:block:($ops:(freetext upto /:=/)
+                                      $args:funcargs
+                                      ":"
+                                      $parts:optext@templatelang /---/))
+
+        macro name blockrule linerule=None langs=None:
+            # sections : [(langx, converter-dict, function-defs)]
+            sections = listfor section in langs:
+
+                # templates : [(tokens, function-def, function-name)]
+                templates = listfor df in section/defs:
+                    args, parts = df/args, df/parts
+                    ops = df/ops.split()
+
+                    gensyms convert converter
+                    funcname = ~("$convert[$[ops| ]]")
+
+                    args = [logix.flist [converter], logix.flist [~__op__]] + args
+                    body = [`\converter .addTemplateParts [ \* parts ]]
+                    df = ``def funcname body args=args
+
+                    ops, df, funcname
+
+                converters = [token:funcname for tokens, _, funcname in templates
+                                             for token in tokens]
+                defs = templates/*1
+
+                section/lang, converters, defs
+
+            allConverters = [lang:converters for lang, converters, _ in sections]
+            allDefs = concat sections/*2
+
+            gensyms converter 
+            blockfunc = `{\blockrule/toparg \blockrule/linesarg | do: \*blockrule/body }
+
+            linetemplate = if linerule:
+                               `{\converter \linerule/arg |
+                                 \converter .addTemplateParts [ \*linerule/parts ] }
+                           else:
+                               None
+
+            `do:
+                \* allDefs
+                \name = \@.Converter \blockfunc \linetemplate \allConverters
+# }}}

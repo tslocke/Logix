@@ -1,0 +1,173 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# {{{ init
+setlang logix.stdlang
+
+import re
+import itertools
+import new
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+    def debugmode x:
+
+limport ltest.testlang
+setlang testlang.testlang
+
+import devlogix
+from devlogix import macros, data, language, rootops
+# }}}
+
+defsuite main:
+
+    debugmode 0
+
+    defgroup macros:
+
+        # {{{ deftest expand:
+        deftest expand:
+            class Op(object):
+                def __macro__ self _: return 'expanded'
+
+            macros.expand(Op()) ?= 'expanded'
+        # }}}
+
+        # {{{ deftest lineno:
+        deftest lineno:
+            class Op(object):
+                def __macro__ self _: return macros.flist [1]
+
+            op = Op()
+            data.setmeta op lineno=12
+            exp = macros.expand(op)
+            data.getmeta exp ~lineno ?= 12
+        # }}}
+
+        # {{{ defgroup expansion:
+        defgroup expansion:
+
+            Op = language.BaseOperator
+
+            class X(Op):
+            class Y(Op):
+                    
+            class A(Op):
+                def __macro__ self _: X self/0
+                
+            class B(Op):
+                def __macro__ self _: Y self/0
+                
+            class Nested(Op):
+                def __macro__ self _: A self/0
+
+            class F(Op):
+            class G(Op):
+
+            # {{{ deftest basics:
+            deftest basics:
+                macros.expand (A 1) ?? {:X 1}
+                macros.expand (B 1) ?? {:Y 1}
+            # }}}
+
+            # {{{ deftest macroInside:
+            deftest macroInside:
+                macros.expand (F (A 2)) ?? {:F {:X 2}}
+
+                macros.expand (F field=(A 2)) ?? {:F /field={:X 2}}
+                
+                macros.expand (F field=(G (A 2))) ?? {:F /field={:G {:X 2}}}
+                    
+                macros.expand (F (A 1) (B 2)) ?? {:F {:X 1} {:Y 2}}
+
+                macros.expand [(A 1), (B 2)] ?? {:list {:X 1} {:Y 2}}
+                macros.expand ((A 1), (B 2)) ?? {:tuple {:X 1} {:Y 2}}
+                macros.expand (dict a=(A 1) b=(B 2))
+                    ?? {:dict /a={:X 1} /b={:Y 2}}
+            # }}}
+
+            # {{{ deftest nestedMacro:
+            deftest nestedMacro:
+                macros.expand (Nested 9) ?? {:X 9}
+                macros.expand (F (Nested 2)) ?? {:F {:X 2}}
+            # }}}
+    
+            # {{{ defgroup quote:
+            defgroup quote:
+                q = rootops.quote
+                e = rootops.escape
+
+                deftest simple:
+                    macros.expand (q (A 1)) ?? {:q {:A 1}}
+
+                deftest escape:
+                    macros.expand (q (F (A 1) (e (A 1))))
+                        ?? {:q {:F {:A 1}
+                                   {:e {:X 1}}}}
+
+                    macros.expand (q (q (e (A 1))
+                                        (e extra=[0] (A 1))))
+                        ?? {:q {: q {:e {:A 1}}
+                                    {:e /extra=[0] {:X 1}}}}
+            # }}}
+
+            # {{{ deftest context:
+            deftest context:
+                class M(Op):
+                    def __macro__ self context:
+                        context/a = 'm'
+                        X self/0
+
+                class N(Op):
+                    def __macro__ self context:
+                        context/a = 'n'
+                        X self/0
+
+                class G(Op):
+                    def __macro__ self context:
+                        context.setGlobal 'a' 'g'
+                        X self/0
+                        
+                class O(Op):
+                    def __macro__ self context:
+                        context/a
+
+                macros.expand (M O()) ?? {:X 'm'}
+                macros.expand (N O()) ?? {:X 'n'}
+
+                macros.expand (N (M O())) ?? {:X {:X 'm'}}
+
+                macros.expand (G O()) ?? {:X 'g'}
+                macros.expand (G (M O())) ?? {:X {:X 'm'}}
+
+                # The second O also get's the context even though it's
+                # not contained inside the G (because G does a setGlobal)
+                macros.expand (X (G O())
+                                    O())
+                    ?? {:X {:X  'g'} 'g'}
+
+                # Here the first O gets the local value of 'a', the next
+                # one gets the gloabal value
+                macros.expand (X (G (M O()))
+                                    O())
+                    ?? {:X {:X  {:X 'm'}} 'g'}
+                # }}}
+        # }}}
+    

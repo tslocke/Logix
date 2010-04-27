@@ -1,0 +1,268 @@
+# {{{ init
+setlang logix.stdlang
+
+try:
+    from livedesk.util import debug
+except ImportError:
+# }}}
+# {{{ def ljoin el lists:
+def ljoin el lists:
+    if len lists == 0:
+        []
+    elif len lists == 1:
+        lists/0
+    else:
+        res = []
+        for l in lists/[:-1]:
+            res.extend l
+            res.append el
+        res.extend lists/[-1]
+        res
+# }}}
+
+# {{{ def tag name content clss=None id=None:
+def tag name content clss=None id=None:
+    el = logix.flist [name]
+    if clss:
+        el/['class'] = clss
+    if id:
+        el/id = id
+
+    if content:
+        el.extend content
+
+    el
+# }}}
+    
+deflang inline(None):
+
+text = (:logix.syntaxlang $lines:(optext@inline oneline /$/)+)
+
+namesyn = (:logix.syntaxlang freetext /[a-zA-Z0-9]*/)
+
+# {{{ def toHtml elem:
+def toHtml elem:
+    tag = elem/0
+    attrs = if hasattr elem ~items:
+                ["$name='$val'" for name, val in elem.items()]
+            else:
+                []
+        
+    content = [(if x isa str: x else: toHtml x)
+               for x in elem/[1:]]
+
+    if content:
+        "<$tag $[attrs| ]>$[content]</$tag>"
+    else:
+        "<$tag $[attrs| ]/>"
+# }}}
+
+# {{{ deflang inline(None):
+deflang inline(None):
+
+    defop 0 "<" $tag:freetext /[a-z0-9\-\:\.\_]+/
+                $attrs:(symbol:("="
+                                ( "'" freetext /[^'\\]*(?:\\.[^'\\]*)*/ "'"
+                                | '"' freetext /[^"\\]*(?:\\.[^"\\]*)*/ '"'
+                                )
+                               ))*
+                ( ">" $content:optext@inline /</
+                  "/" $endTag:freetext /[a-z0-9\-\:\.\_]+/ ">"
+                | "/>" <>
+                )
+        func tag attrs content=None endTag=None:
+            assert endTag is None or tag == endTag
+            logix.flist.new (if content: [tag] + content else: [tag]) attrs
+    
+    defop 0 "*" optext@inline /\*/ func *txt:
+        if len txt == 0: '*' else: tag ~b txt
+
+    defop 0 "_" optext@inline /\_/ func *txt:
+        if len txt == 0: '*' else: tag ~u txt
+
+    defop 0 "/" optext@inline /\// func *txt:
+        if len txt == 0: '/' else: tag ~i txt
+
+    defop 0 "`" optext@inline /`/ func *txt:
+        if len txt == 0: '`' else: tag ~code txt
+# }}}
+        
+# {{{ deflang webdoc
+defop 0 "deftag" expr "as" expr
+    macro op tag:
+        optoken = logix.eval op
+        `defop 0 (lit \optoken) ["." $clss:namesyn]/- ["/" $id:namesyn ]/-
+                           ":" $lines:(optext@inline oneline /$/)+
+            func lines clss=None id=None:
+                tag \tag (ljoin "\n" lines) clss=clss id=id 
+
+classAndId = (:logix.syntaxlang ["." $clss:namesyn]/- ["/" $id:namesyn ]/-)
+                
+deflang webdoc(None):
+
+    deftag '*' as "h1"
+    deftag '**' as "h2"
+    deftag '***' as "h3"
+    deftag 'p' as "p"
+    deftag 'q' as 'blockquote'
+    deftag 'pre' as 'pre'
+
+    defop 0 'bl' classAndId
+                 ":" $items:block:("+" $lines:(optext@inline oneline /$/)+ <>)
+        func items clss=None id=None:
+            tag "ul"
+                [[~li] + (ljoin '\n' i/lines) for i in items]
+                clss=clss
+                id=id
+
+    defop 0 'nl' classAndId
+                 ":" $items:block:("+" $lines:(optext@inline oneline /$/)+ <>)
+        func items clss=None id=None:
+            tag "ol"
+                [[~li] + (ljoin '\n' i/lines) for i in items]
+                clss=clss
+                id=id
+
+    defop 0 "---" func: [~hr]
+
+    defop 0 "script:" freetext /.*/+
+        func *lines:
+            [~script, "\n".join lines]
+
+    defop 0 "table" classAndId ":" $:block:( ("[" freetext upto /\]/)*)
+        func rows clss=None id=None:
+            content = listfor row in rows:
+                [~tr] + [[~td, txt, nowrap=1] for txt in row]
+
+            tag 'table' content clss=clss id=id
+
+    defop 0 "div" classAndId ":" $lines:(optext@webdoc oneline /$/)+
+        func lines clss=None id=None:
+            tag 'div' (ljoin "\n" lines) clss=clss id=id 
+# }}}
+
+htmlfile = "d:/desktop/tmp.html"
+defop 0 "show" block@webdoc func *lines:
+    doc = lines *> toHtml .> "\n".join
+    print doc
+    file htmlfile 'w' .write
+        ("""|<head>
+            |<link rel="stylesheet" href="file://d:/desktop/foo.css" type="text/css">
+            |</head>
+            " + doc)
+
+# {{{ def test:
+def test:
+    show
+      # {{{ script:
+      script:
+          function ts_getInnerText(el) {
+              if (typeof el == "string") return el;
+              if (typeof el == "undefined") { return el };
+              if (el.innerText) return el.innerText;	//Not needed but it is faster
+              var str = "";
+	
+              var cs = el.childNodes;
+              var l = cs.length;
+              for (var i = 0; i < l; i++) {
+                  switch (cs[i].nodeType) {
+                      case 1: //ELEMENT_NODE
+                          str += ts_getInnerText(cs[i]);
+                          break;
+                      case 3: //TEXT_NODE
+                          str += cs[i].nodeValue;
+                          break;
+		  }
+              }
+              return str;
+          }
+          
+          function sort(table, col) {
+              sorter = function (a,b) { 
+                  aa = parseFloat(ts_getInnerText(a.cells[col]));
+                  if (isNaN(aa)) aa = 0;
+                  bb = parseFloat(ts_getInnerText(b.cells[col])); 
+                  if (isNaN(bb)) bb = 0;
+                  return aa-bb;
+              }
+
+              var newRows = new Array();
+              for (j=1;j<table.rows.length;j++) {
+                  newRows[j-1] = table.rows[j];
+              }
+              newRows.sort(sorter);
+              for (i=0;i<newRows.length;i++) {
+                  table.tBodies[0].appendChild(newRows[i])
+              }
+          }
+
+          function doit() {
+              sort(document.getElementById("tab"), 7)
+          }
+      # }}}
+    
+      *:Very Cool Stuff
+
+      ---
+
+      p: <a onclick="doit()">Click Me!</a>
+
+      p.foo: This is some *damn* _fine_ /scrooberoonie/.
+         Oh yes <br/> `it is`!
+
+      p: <img src='foo.png'/>
+
+      bl:
+
+          + Point number *one*!
+
+          + Point number two
+                  ah hah haaa!
+      nl:
+
+          + Point number *one*!
+
+          + Point number two
+                  ah hah haaa!
+                    
+      div.scroll:
+          table/tab:
+             # {{{ table data
+             [State] [Qty] [Issue] 	                   [Coupon][Maturity] 	 [YTM] 	   [WCY]   [Price]
+             [MA]    [35 ] [MASSACHUSETTS ST INDL FIN   ]  [5.50 ] [05/15/2007]  [2.40 ]   [2.40]  [108.498 ]
+             [NY]    [490] [NEW YORK ST MTG AGY REV     ]  [2.25 ] [10/01/2007]  [2.25 ]   [2.25]  [100.00  ]
+             [AR]    [115] [NORTHWEST ARK REGL ARPT AUTH]  [7.625] [02/01/2008]  [2.90 ]   [2.90]  [114.935 ]
+             [NC]    [250] [CHARLOTTE NC CTFS           ]  [4.00 ] [03/01/2008]  [2.50 ]   [2.50]  [104.302 ]
+             [DC]    [5  ] [DISTRICT COLUMBIA           ]  [5.25 ] [06/01/2008]  [2.60 ]   [2.60]  [109.11  ]
+             [FL]    [25 ] [DADE CNTY FLA SCH DIST      ]  [5.25 ] [07/15/2008]  [2.50 ]   [2.50]  [108.823 ]
+             [TN]    [5  ] [TENNESSEE ENERGY ACQUISITION]  [4.50 ] [09/01/2008]  [2.60 ]   [2.60]  [106.308 ]
+             [NC]    [10 ] [CATAWBA CNTY NC HOSP REV    ]  [4.40 ] [10/01/2008]  [2.50 ]   [2.50]  [106.462 ]
+             [FL]    [10 ] [JACKSONVILLE FL ELEC AUTH   ]  [5.00 ] [10/01/2008]  [2.60 ]   [2.60]  [108.147 ]
+             [VI]    [10 ] [VIRGIN ISLANDS PUB FIN AUTH ]  [5.00 ] [10/01/2008]  [3.25 ]   [3.25]  [105.863 ]
+             [FL]    [20 ] [LAKELAND FLA HOSP SYS REV   ]  [5.00 ] [11/15/2008]  [2.50 ]   [2.50]  [108.779 ]
+             [CA]    [280] [CALIFORNIA POLLUTN CTL FING ]  [4.375] [12/01/2008]  [3.10 ]   [3.10]  [104.471 ]
+             [WA]    [35 ] [KING CNTY WASH RURAL LIBR   ]  [4.50 ] [12/01/2008]  [2.50 ]   [2.50]  [107.103 ]
+             [TX]    [25 ] [PORT CORPUS CHRISTI AUTH TEX]  [4.10 ] [12/01/2008]  [2.85 ]   [2.85]  [104.406 ]
+             [MO]    [25 ] [KANSAS CITY MO INDL DEV AUTH]  [4.90 ] [12/31/2008]  [3.699]   [3.70]  [104.241 ]
+             [NC]    [10 ] [NORTH CAROLINA EASTN MUN PWR]  [6.00 ] [01/01/2009]  [2.60 ]   [2.60]  [112.307 ]
+             [SC]    [10 ] [PIEDMONT MUN PWR AGY S C    ]  [5.60 ] [01/01/2009]  [3.15 ]   [3.15]  [108.765 ]
+             [NC]    [250] [CHARLOTTE NC CTFS           ]  [4.00 ] [03/01/2009]  [2.65 ]   [2.65]  [105.085 ]
+             [NC]    [10 ] [HENDERSON CNTY NC CTFS      ]  [4.25 ] [03/01/2009]  [2.70 ]   [2.70]  [105.832 ]
+             [SC]    [10 ] [COLUMBIA SC CTFS            ]  [3.125] [06/01/2009]  [2.70 ]   [2.70]  [101.691 ]
+             [OH]    [20 ] [COLUMBUS OHIO TAX INCREMENT ]  [4.875] [06/01/2009]  [2.70 ]   [2.70]  [109.556 ]
+             [CT]    [165] [CONNECTICUT ST SPL OBLIG PKG]  [6.125] [07/01/2009]  [3.50 ]   [3.50]  [110.451 ]
+             [CT]    [65 ] [CONNECTICUT ST HEALTH & EDL ]  [5.50 ] [07/01/2009]  [3.00 ]   [3.00]  [110.071 ]
+             [FL]    [25 ] [FLORIDA ST DEPT             ]  [5.00 ] [07/01/2009]  [2.65 ]   [2.65]  [109.545 ]
+             [SC]    [10 ] [SOUTH CAROLINA EDL FACS AUTH]  [5.00 ] [07/01/2009]  [3.00 ]   [3.00]  [108.057 ]
+             [FL]    [10 ] [PALM BEACH CNTY FLA SCH BRD ]  [3.75 ] [08/01/2009]  [2.70 ]   [2.70]  [104.337 ]
+             [SC]    [5  ] [CHARLESTON CNTY SC REV      ]  [4.40 ] [08/15/2009]  [2.75 ]   [2.75]  [106.865 ]
+             [PA]    [25 ] [PITTSBURGH PA WTR & SWR AUTH]  [3.00 ] [09/01/2009]  [2.75 ]   [2.75]  [101.05  ]
+             [FL]    [20 ] [LEE CO FL CAP REV           ]  [5.50 ] [10/01/2009]  [2.70 ]   [2.70]  [111.979 ]
+             # }}}
+# }}}
+
+def test2:
+    `do:
+        setlang webdoc
+        div:
+            p: abc

@@ -1,0 +1,602 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# {{{ init
+setlang logix.stdlang
+
+import re
+import itertools
+import new
+import compiler
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+    def debugmode x:
+
+limport ltest.testlang
+setlang testlang.testlang
+
+import devlogix
+from devlogix import rootops, pycompile, language, parser
+# }}}
+
+defsuite main:
+
+    debugmode 0
+
+    # {{{ init
+    lmodules = [:]
+
+    if not hasattr devlogix 'baselang':
+        devlogix.init()
+    devlogix.clearCaches()
+
+    baselang = devlogix.baselang.__impl__
+    pyexpr = devlogix.baselang.__impl__.getContinuationOp()
+    # }}}
+
+    # {{{ functions
+    def comp src execparse=False:
+        code = baselang.parse src
+        pycompile.compile code "<string>" "exec" importlogix=False
+
+    def pycomp src:
+        tree = compiler.parse src
+        compiler.misc.set_filename '' tree
+        compiler.pycodegen.ModuleCodeGenerator tree .getCode()
+
+    def comparecode lxsrc pysrc=None:
+        pysrc = pysrc or lxsrc
+        lxcode = comp lxsrc
+        pycode = pycomp pysrc
+        lxcode.co_code ?= pycode.co_code
+
+    def lxeval src env=None:
+        devlogix.eval (baselang.parse src /0) env
+
+    def lxexec src env:
+         env/__name__ = '__main__'
+         baselang.parse src mode='exec' execenv=env
+    
+    def compareRes lxsrc pysrc=None env=None:
+        pysrc = pysrc or lxsrc
+        lxres = lxeval lxsrc env
+        pyres = if env is None: eval pysrc
+                          else: eval pysrc env
+        lxres ?= pyres
+
+    def bytecodeExec src env:
+        """Evaluate \src by first parsing and then execing the returned codeobject
+           Things like defop and deflang are implemented differently by the
+           compiler and the parser, so this is needed to test the compiled code.
+        """
+        parseEnv = env.copy()
+        codeobject = baselang.parse src mode='execmodule' execenv=parseEnv
+        exec codeobject in env
+    # }}}
+
+    # {{{ deftest continuation:
+    deftest continuation:
+        def parse s:
+            baselang.parse s /0
+            
+        parse "f()" ?? {:pyexpr ~f [['call']]}
+        parse "f(1)" ?? {:pyexpr ~f [[1, 'call']]}
+        parse "f[1]" ?? {:pyexpr ~f [[1, 'subscript']]}
+        parse "f 1" ?raises {:SyntaxError}
+
+        parse "f[1,2]" ?? {:pyexpr ~f [[1, 2, 'subscript']]}
+        parse "f[1,2,3]" ?? {:pyexpr ~f [[1, 2, 3, 'subscript']]}
+
+        parse "f(1)[2]" ?? {:pyexpr ~f [[1, 'call'], [2, 'subscript']]}
+
+        parse "f(1,2)"     ?? {:pyexpr ~f [{:* 1 2 'call'}]}
+        parse "f(1, a=1)"  ?? {:pyexpr ~f [{:* 1 {:* ~a 1} 'call'}]}
+        parse "f(a=1,b=2)" ?? {:pyexpr ~f [{:* {:* ~a 1} {:* ~b 2} 'call'}]}
+        parse "f(*a)"      ?? {:pyexpr ~f [{:* /star=(~a) 'call'}]}
+        parse "f(**a)"     ?? {:pyexpr ~f [{:* /dstar=(~a) 'call'}]}
+        parse "f(*a, **b)" ?? {:pyexpr ~f [{:* /star=(~a) /dstar=(~b) 'call'}]}
+        parse "f(1, *a)"   ?? {:pyexpr ~f [{:* 1 /star=(~a) 'call'}]}
+        parse "f(1, **a)"  ?? {:pyexpr ~f [{:* 1 /dstar=(~a) 'call'}]}
+
+        parse "l[:]"     ?? {:pyexpr ~l [{:* None None None 'slice'}]}
+        parse "l[1:]"    ?? {:pyexpr ~l [{:* 1 None None 'slice'}]}
+        parse "l[:1]"    ?? {:pyexpr ~l [{:* None 1 None 'slice'}]}
+        parse "l[1:2]"   ?? {:pyexpr ~l [{:* 1 2 None 'slice'}]}
+        parse "l[::1]"   ?? {:pyexpr ~l [{:* None None 1 'slice'}]}
+        parse "l[1::2]"  ?? {:pyexpr ~l [{:* 1 None 2 'slice'}]}
+        parse "l[:1:2]"  ?? {:pyexpr ~l [{:* None 1 2 'slice'}]}
+        parse "l[1:2:3]" ?? {:pyexpr ~l [{:* 1 2 3 'slice'}]}
+    # }}}
+
+    # {{{ deftest funcCall:
+    deftest funcCall:
+        lxeval "f()" (dict f={|10}) ?= 10
+        lxeval "f(*x)" (dict f={*args|args} x=(1,2,3)) ?= (1,2,3)
+    # }}}
+
+    # {{{ defgroup operators:
+    defgroup operators:
+
+        # {{{ def test src:
+        def test *src:
+            src = '\n'.join src + '\n'
+
+            env = dict x=0
+            lxexec src env
+            lxx = env/x
+
+            env = dict x=0
+            exec src in env
+            pyx = env/x
+
+            lxx ?= pyx
+        # }}}
+
+        # {{{ deftest strings:
+        deftest strings:
+            # The 'x =' is to stop the Python parser treating the string as a docstring
+            comparecode "x = 'a'"
+            comparecode 'x = "a"'
+
+            comparecode r"x = '\\'"
+            comparecode r"x = 'a\nb'"
+
+            comparecode r"x = 'x\ty\n\'z'"
+
+            comparecode r"x = '''abc\ndef'''"
+
+            comparecode r"x = r'abc\n'"
+        # }}}
+        
+        # {{{ deftest basicops:
+        deftest basicops:
+            comparecode "1**2"
+            comparecode "~2"
+            comparecode "1%2"
+            comparecode "1/2"
+            comparecode "1//2"
+            comparecode "1*2"
+            comparecode "1-2"
+            comparecode "1+2"
+            
+            comparecode "1>>2"
+            comparecode "1<<2"
+            
+            comparecode "1&2"
+            comparecode "1^2"
+            comparecode "1|2"
+            
+            comparecode "1==2"
+            comparecode "1!=2"
+            comparecode "1<>2"
+            comparecode "1>2"
+            comparecode "1>=2"
+            comparecode "1<2"
+            comparecode "1<=2"
+            comparecode "1 is 2"
+            comparecode "1 is not 2"
+            comparecode "1 in 2"
+        # }}}
+
+        # {{{ deftest assignops:
+        deftest assignops:
+            comparecode "a += 1"
+            comparecode "a *= 1"
+            comparecode "a -= 1"
+            comparecode "a /= 1"
+            comparecode "a **= 1"
+            comparecode "a %= 1"
+            comparecode "a &= 1"
+            comparecode "a |= 1"
+            comparecode "a ^= 1"
+        # }}}
+
+        # {{{ deftest listAndDict:
+        deftest listAndDict:
+            comparecode "[]"
+            comparecode "[1]"
+            comparecode "[1,2]"
+            comparecode "[1,2,]"
+
+            # test results because logix slice code is different
+            # to standard python
+            env = [~x:range 10]
+            compareRes "x[:]" env=env
+            compareRes "x[1:]" env=env
+            compareRes "x[:1]" env=env
+            compareRes "x[::2]" env=env
+            compareRes "x[:1:2]" env=env
+            compareRes "x[1::2]" env=env
+            compareRes "x[1:2:2]" env=env
+            
+            compareRes "x[1]" env=env
+
+            comparecode "[x for x in y]"
+            comparecode "[a for b in c if d]"
+            comparecode "[a for b in c if d if e]"
+            comparecode "[a for b in c if d if e for f in g if h]"
+            
+            comparecode "{}"
+            comparecode "{1:2}"
+            comparecode "{1:2,3:4}"
+            # }}}
+
+        # {{{ deftest controlflow:
+        defgroup controlflow:
+
+            # {{{ deftest if_:
+            deftest if_:
+                test "if 1==2: x = 10"
+                test "if 1==1: x = 10"
+                test "if 1==2: x = 10\nelse: x = 11"
+                test "if 1==1: x = 10\nelse: x = 11"
+            # }}}
+
+            # {{{ deftest while_:
+            deftest while_:
+                test "while x < 10: x += 1"
+
+                test "while x < 10:"
+                     "  x += 1"
+                     "  if x == 6: continue"
+                     "  if x == 8: break"
+
+                test "while x < 10:"
+                     "  if x == 50: break"
+                     "  x += 1"
+                     "else: x = 99"
+
+                test "while x < 10:"
+                     "  if x == 5: break"
+                     "  x += 1"
+                     "else: x = 99"
+            # }}}
+
+            # {{{ deftest for_:
+            deftest for_:
+                test "for a in range(5): x += a"
+
+                test "for a in range(5):"
+                     "  if a == 3: break"
+                     "  x += a"
+
+                test "for a in range(5):"
+                     "  if a == 6: break"
+                     "  x += a"
+
+                test "for a in range(5):"
+                     "  if a == 3: break"
+                     "  x += a"
+                     "else: x = 99"
+
+                test "for a in range(5):"
+                     "  if a == 6: break"
+                     "  x += a"
+                     "else: x = 99"
+            # }}}
+
+            # {{{ deftest do_:
+            deftest do_:
+                lxeval """
+                    do:
+                        x = 1
+                        x += 1
+                        x
+                    """ ?= 2
+            # }}}
+        # }}}
+
+        # {{{ defgroup definitions:
+        defgroup definitions:
+            
+            # {{{ deftest def_:
+            deftest def_:
+                test "x = 1"
+
+                test "def f(a): return a + 1"
+                     "x = f(10)"
+
+                test "def f():"
+                     " global x"
+                     " x = 10"
+                     "f()"
+
+                test "def f():"
+                     "  global x"
+                     "  x = 5"
+                     "  return"
+                     "  x = 10"
+                     "f()"
+
+                test "def f(a,b): return a+b"
+                     "x = f(3,4)"
+
+                test "def f(a,b): return a+b"
+                     "x = f(a=3,b=4)"
+
+                test "def f(*args): return args"
+                     "x = f(1,2,3)"
+
+                test "def f(*args, **kws): return args,kws"
+                     "x = f(1,2,3,a=1,b=2)"
+            # }}}
+                     
+            deftest lambda_:
+                compareRes "(lambda x: x+1)(5)"
+
+            deftest class_:
+                test "class C:"
+                     "    field = 10"
+                     "x = C.field"
+
+                test "class C:"
+                     "  x = 10"
+                     "class D(C):"
+                     "  y = 10"
+                     "x = D.x"
+        # }}}
+
+        # {{{ deftest import_:
+        deftest import_:
+            test "import re"
+                 "x = re.compile"
+
+            test "from re import compile"
+                 "x = compile"
+
+            test "from re import *"
+                 "x = compile"
+        # }}}
+
+        # {{{ deftest exceptions:
+        deftest exceptions:
+            test "try:"
+                 "  x = 1/0"
+                 "except:"
+                 "  x = 10"
+
+            test "try:"
+                 "  x = 1/0"
+                 "except ZeroDivisionError:"
+                 "  x = 10"
+                 
+            test "try:"
+                 "  x = 11"
+                 "except:"
+                 "  x = 10"
+
+            test "try:"
+                 "  x = 10"
+                 "  raise Exception"
+                 "  x = 1/0"
+                 "except ZeroDivisionError:"
+                 "  x = 1"
+                 "except:"
+                 "  x = 2"
+        # }}}
+
+        # {{{ deftest misc:
+        deftest misc:
+            env = dict x=0
+            
+            lxexec "assert x == 0" env
+            lxexec "assert x == 1" env ?raises {:AssertionError}
+
+            lxexec "exec 'x = 10'" env
+            env/x ?= 10
+
+            env = [:]
+            lxexec """
+                a = 1
+                x = 1
+                del x
+                """ env
+            'a' in env?
+            'x' not in env?
+
+            lxeval "[1].count(1)" ?= 1
+        # }}}
+
+        # {{{ deftest tripleQuote:
+        deftest tripleQuote:
+            lxeval '"""abc"""' ?= 'abc'
+        # }}}
+
+        # {{{ deftest continuation:
+        deftest continuation:
+            lxeval "range(5)[3]" ?= 3
+
+            lxeval "'b'.capitalize()" ?= 'B'
+            lxeval "'AB'[1]" ?= 'B'
+            lxeval "'ab'[1].capitalize()" ?= 'B'
+            lxeval "'a,b,c'.split(',')[1].capitalize()" ?= 'B'
+        # }}}
+
+        # {{{ deftest quoting:
+        deftest quoting:
+            lxeval "` `import foo as \\b" ?? {:rootops.quote}
+        # }}}
+    # }}}
+
+    # {{{ deftest assignment:
+    deftest assignment:
+
+        env = [:]
+
+        lxexec "a = 1" env
+        env/a ?= 1
+
+        lxexec "b, c, d = 1, 2, 3" env
+        env/b ?= 1
+        env/c ?= 2
+        env/d ?= 3
+
+        class c:
+        env = dict c=c
+        lxexec "c.foo = 10" env
+        env/c.foo ?= 10
+
+        env = dict x=[1,2]
+        lxexec "x[0] = 10" env
+        env/x ?= [10,2]
+
+        env = dict x=[1,2,3]
+        lxexec "x[1:] = [8,9]" env
+        env/x ?= [1,8,9]
+
+        env = dict x=[:]
+        lxexec "x[1,2] = 10" env
+        env/x/[1,2] ?= 10
+    # }}}
+
+    # {{{ deftest opQuote:
+    deftest opQuote:
+        lxeval "``=" ?= baselang.getOp '='
+    # }}}
+
+    # {{{ deftest assignInIf:
+    deftest assignInIf:
+        comp """
+           if x: y
+           elif a = b: z
+           """ ?raises {:SyntaxError}
+    # }}}
+
+    # {{{ defgroup langlang:
+    defgroup langlang:
+        """This stuff is already tested in testlanglang, but there the
+           parse-time implementation is tested. Here we test the compiled
+           implementation (from pycompile.py)
+           This is also an opporunity to test non-operators members of
+           languages (e.g. functions)
+        """
+        stdenv = dict logix=devlogix
+                      __name__='testing - there is no name'
+                      base=baselang
+
+
+        # {{{ defgroup deflang_:
+        defgroup deflang_:
+
+            # {{{ deftest basics:
+            deftest basics:
+                bytecodeExec "deflang foo:" stdenv
+                stdenv/foo ?? {:language.Language __impl__={:* name='foo'}}
+
+                bytecodeExec "deflang baa(foo):" stdenv
+                stdenv/baa.__impl__ ??
+                    {:* name='baa' parent=(stdenv/foo.__impl__)}
+            # }}}
+
+            # {{{ deftest withDefop:
+            deftest withDefop:
+
+                bytecodeExec """
+                    deflang foo:
+                        defop 0 "myop"
+                    """ stdenv
+
+                stdenv/foo.__impl__.getOp "myop" ?? {:language.OperatorType}
+            # }}}
+            
+            # {{{ deftest withMembers:
+            deftest withMembers:
+
+                bytecodeExec """
+                    deflang foo:
+                        x = 1
+                        def f():
+                        defop 0 "myop"
+                    """ stdenv
+
+                v = vars stdenv/foo
+                len v ?= 4
+                for f in 'x', 'f', '__impl__', '__module__':
+                    f in v ?
+            # }}}
+
+            # {{{ deftest forwardDecl:
+            deftest forwardDecl:
+                bytecodeExec "deflang foo:" stdenv
+                stdenv/foo ?? {:language.Language}
+
+                bytecodeExec """
+                    deflang baa:
+                    deflang eek(baa):
+                    deflang baa:
+                        defop 0 'foo'
+                    """ stdenv
+                baa = stdenv/baa.__impl__
+                baa.getOp "foo" ?? {:language.OperatorType}
+                stdenv/eek.__impl__ ?? {:* parent=baa}
+
+                # base language error
+                bytecodeExec """
+                    deflang baa:
+                    deflang baa(base):
+                        defop 0 'foo'
+                    """  stdenv
+                    ?raises {:SyntaxError}
+            # }}}
+        # }}}
+
+        deftest tempDefop:
+            bytecodeExec """
+                setlang logix.baselang
+                defop 0 "myop"
+                """ stdenv
+
+            stdenv/['base~'].__impl__.getOp "myop" ?? {:language.OperatorType}
+    # }}}
+           
+    # {{{ deftest quote:
+    deftest quote:
+        lxeval "`a = b" ?? {:(baselang.getOp '=') ~a ~b}
+
+        env = dict x=10
+        lxeval "`a = \\x" env ?? {:(baselang.getOp '=') ~a 10}
+
+        env = dict l=[1,2,3]
+        lxeval "`[\*l]" env ?? {:(baselang.getOp '[') 1 2 3 'list'}
+        lxeval "`[5, \*l, 6]" env ?? {:(baselang.getOp '[') 5 1 2 3 6 'list'}
+
+        env = dict t=(1,2,3)
+        lxeval "`[\*t]" env ?? {:(baselang.getOp '[') 1 2 3 'list'}
+        lxeval "`[5, \*t, 6]" env ?? {:(baselang.getOp '[') 5 1 2 3 6 'list'}
+
+        fl = devlogix.flist
+        
+        env = dict l=(fl 1 2 a=10)
+        lxeval "`f(\*l)" env
+            ?? {:(baselang.getOp "__continue__") ~f {:fl{:fl 1 2 /a=10}}}
+    # }}}
+
+    # {{{ deftest elifError:
+    deftest elifError:
+        comp """
+           if x:
+               1
+           elif y:
+               x +
+           """ ?raises {:SyntaxError lineno=5}
+           # line-num should be 5
+    # }}}
+ 

@@ -1,0 +1,102 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# {{{ init
+setlang logix.stdlang
+
+import re
+import itertools
+import new
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+    def debugmode x:
+
+limport ltest.testlang
+setlang testlang.testlang
+
+import devlogix
+from devlogix import rootops
+# }}}
+
+def devsym x: devlogix.Symbol x
+
+defsuite main:
+
+    debugmode 0
+
+    # {{{ defgroup syntaxlang:
+    defgroup syntaxlang:
+
+        rl = rootops.makeSyntaxlang None ''
+
+        def parse s: rl.__impl__.parse s /0
+
+        def rulep name *args:
+            {:rootops.RuleOp __class__={:* __name__=name} /*=args}
+
+        # {{{ deftest basics:
+        deftest basics:
+            parse '"a"' ?? rulep ~DoubleQuoteOp 'a'
+            parse "'a'" ?? rulep ~SingleQuoteOp 'a'
+            parse 'expr' ?? rulep ~ExprOp
+            parse 'expr@l' ?? rulep ~ExprOp ~l
+            parse 'term' ?? rulep ~TermOp
+            parse 'term@l' ?? rulep ~TermOp ~l
+            parse 'block' ?? rulep ~BlockOp
+            parse 'block@l' ?? rulep ~BlockOp ~l
+            parse 'token' ?? rulep ~TokenOp
+            parse 'token@l' ?? rulep ~TokenOp ~l
+            parse '<foo>' ?? rulep ~TrivialOp ~foo
+            parse 'debug()' ?? rulep ~DebugOp
+            parse 'debug(1)' ?? rulep ~DebugOp 1
+            parse 'symbol' ?? rulep ~SymbolOp
+        # }}}
+
+        # {{{ deftest compound:
+        deftest compound:
+            parse 'term term' ?? rulep ~SeqOp (rulep ~TermOp) (rulep ~TermOp)
+
+            parse '"a"*' ?? rulep ~RepOp (rulep ~DoubleQuoteOp 'a')
+
+            parse '"a"+' ?? rulep ~Rep1Op (rulep ~DoubleQuoteOp 'a')
+
+            parse '["a"]' ?? rulep ~OptOp (rulep ~DoubleQuoteOp 'a')
+            parse '["a"]/a' ?? rulep ~OptOp (rulep ~DoubleQuoteOp 'a') ~a
+            parse '["a"]/-' ?? rulep ~OptOp (rulep ~DoubleQuoteOp 'a') {:object}
+
+            parse '"a" | "b" | "c"'
+                ?? rulep ~ChoiceOp *:[rulep ~DoubleQuoteOp x for x in 'a','b','c']
+
+            parse '$foo:expr' ?? rulep ~NamedRuleOp 'foo' (rulep ~ExprOp)
+            parse '$:expr' ?? rulep ~NamedRuleOp None (rulep ~ExprOp)
+
+            parse "symbol:expr" ?? rulep ~ParsedNameRuleOp (rulep ~ExprOp)
+        # }}}
+
+        # {{{ deftest freetext:
+        deftest freetext:
+            parse 'freetext /a/' ?? rulep ~FreetextOp False 'a'
+            parse 'freetext upto /a/' ?? rulep ~FreetextOp "upto" 'a'
+            parse 'optext /a/' ?? rulep ~OptextOp 'a'
+            parse 'optext@foo /a/' ?? {:* 'a' /lang='foo'}
+        # }}}
+    # }}}
+            

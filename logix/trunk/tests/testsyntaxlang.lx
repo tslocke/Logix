@@ -1,0 +1,123 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# {{{ init
+setlang logix.stdlang
+
+import re
+import itertools
+import new
+import compiler
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+    def debugmode x:
+
+limport ltest.testlang
+setlang testlang.testlang
+
+import devlogix
+from devlogix import rootops, parser, language, pycompile, data
+# }}}
+
+defsuite main:
+
+    debugmode 0
+
+    # {{{ init
+    pycompile.installRootopCompilers()
+    syntaxlang = rootops.makeSyntaxlang None ''
+    # }}}
+
+    Seq = parser.SequenceRule
+    Choice = parser.ChoiceRule
+    Lit = parser.LiteralRule
+    Opt = parser.Opt
+    Named = parser.NamedRule
+    Rep = parser.Rep
+    Rep1 = parser.Rep1
+    Expr = parser.ExpressionRule
+    Term = parser.TermRule
+    Block = parser.BlockRule
+    Debug = parser.DebugRule
+    Symbol = parser.SymbolRule
+    Token = parser.TokenRule
+    Trivial = parser.TrivialRule
+
+    l = parser.Language 'l'
+    env = dict l=l
+
+    # {{{ def evalrule src:
+    def evalrule src:
+        devlogix.eval (syntaxlang.__impl__.parse src /0) env
+    # }}}
+
+    # {{{ deftest basics:
+    deftest basics:
+        evalrule '"a"' ?? {:Lit token='a'}
+        evalrule 'expr' ?? {:Expr}
+        evalrule 'expr@l' ?? {:Expr language={:* userlang=l}}
+        evalrule 'term' ?? {:Term}
+        evalrule 'term@l' ?? {:Term language={:* userlang=l}}
+        evalrule 'block' ?? {:Block}
+        evalrule 'block@l' ?? {:Block language={:* userlang=l}}
+        evalrule '<foo>' ?? {:Trivial result="foo"}
+        evalrule 'debug()' ?? {:Debug}
+        evalrule 'debug(1)' ?? {:Debug message=1}
+        evalrule 'symbol' ?? {:Symbol}
+    # }}}
+
+    # {{{ deftest compound:
+    deftest compound:
+        evalrule '"a" "b"' ?? {:Seq sequence=[{:Lit token='a'},
+                                              {:Lit token='b'}]}
+
+        evalrule '[expr]' ?? {:Opt rule={:Expr} alt=data.none}
+        evalrule '$x:[expr]' ?? {:Named name='x'
+                                        rule={:Opt rule={:Expr} alt=parser.nothing}}
+        evalrule '[expr]/-' ?? {:Opt rule={:Expr} alt=parser.nothing}
+        evalrule '[expr]/1' ?? {:Opt rule={:Expr} alt=1}
+        evalrule '[expr]/a' ?? {:Opt rule={:Expr} alt='a'}
+
+        evalrule 'term+' ?? {:Rep1 rule={:Term}}
+        evalrule 'term*' ?? {:Rep rule={:Term}}
+        evalrule '$x:term+' ?? {:Rep1 rule={:Named name='x' rule={:Term}}}
+        evalrule '$x:term*' ?? {:Rep rule={:Named name='x' rule={:Term}}}
+        evalrule "'a' | 'b' | expr" ?? {:Choice choices=[{:Lit token='a'},
+                                                         {:Lit token='b'},
+                                                         {:Expr}]}
+    # }}}
+
+    # {{{ deftest general:
+    deftest general:
+
+        rule = evalrule
+            '"if" $test:expr ":" $body:block $else:[ "else" ":" block ]'
+        rule ?? {:Seq sequence=[
+                         {:Lit token='if'},
+                         {:Named name='test' rule={:Expr}},
+                         {:Lit token=':'},
+                         {:Named name='body' rule={:Block}},
+                         {:Named name='else'
+                                 rule={:Opt rule={:Seq sequence=[
+                                                           {:Lit token='else'},
+                                                           {:Lit token=':'},
+                                                           {:Block}]}}}]}
+    # }}}

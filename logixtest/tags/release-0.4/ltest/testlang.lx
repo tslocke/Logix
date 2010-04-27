@@ -1,0 +1,522 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+import types
+import re
+import sre
+import sys
+
+from logix.util import debug
+
+import runner
+from runner import *
+
+stdlang = logix.stdlang
+setlang logix.stdlang
+
+# {{{ class Pattern:
+class Pattern:
+    class IsTrue:
+    isTrue = IsTrue()
+
+    # {{{ def __init__ self typ strictType subtests objtest:
+    def __init__ self typ strictType subtests objtest:
+        self.typ = typ # None means don't check type
+        self.strictType = strictType
+        self.subtests = subtests or []
+        self.objtest = objtest
+    # }}}
+
+    # {{{ def testType self x:
+    def testType self x:
+        typ = self.typ
+        if typ:
+            res = if typ isa str:
+                      if typ.find '.' == -1:
+                          xtype = type x .("__name__", '')
+                      else:
+                          xtype = ("%s.%s" % (type x .("__module__", ''),
+                                              type x .("__name__", '')))
+                      typ == xtype
+                  elif self.strictType:
+                      x isa! typ
+                  else:
+                      x isa typ
+            res or do:
+                typestr = if typ isa str: typ else: typ.__name__
+                """|: wrong type:
+                   |%r
+                   | 
+                   |Expected type: %s
+                   |Found type   : %s
+                   " % do:
+                        xtype = if x isa types.InstanceType: x.__class__
+                                else: (type x).__name__
+                        (x, xtype, typestr)
+        else:
+            True
+    # }}}
+
+    # {{{ def testObj self x:
+    def testObj self x:
+        if self.objtest is None or self.objtest x:
+            True
+        else:
+            ": object test failed"
+    # }}}
+
+    # {{{ def testSub self subtest obj:
+    def testSub self subtest obj:
+        loc, pattval = subtest
+        try:
+            objval = if loc == "/*":
+                         list obj
+                     elif loc/[0] == "/":
+                         try:
+                             key = int loc/[1:]
+                         except ValueError:
+                             key = loc/[1:]
+                         obj/[key]
+                     else:
+                         obj.(loc)
+        except:
+            return ": no such location %r" % loc
+
+        locname = if loc/[0] == '/': loc else: '.' + loc
+
+        # {{{ def ismatch locname pattval objval:
+        def ismatch locname pattval objval:
+            res = if pattval isa Pattern:
+                      pattval.test objval
+
+                  elif pattval isa (list, tuple):
+                      # {{{ recursively try \ismatch on each element
+                      try:
+                          olen = len objval
+                      except TypeError:
+                          olen = None
+                      if olen == None:
+                          ": not a sequence:\n%r" % objval
+                      elif len pattval != len objval:
+                          ": length mismatch: (pattern---actual)\n%s\n---\n%s"
+                              % (pattval, objval)
+                      else:
+                          for i in range (len pattval):
+                              sublocname = "/%d" % i
+                              subres = ismatch sublocname pattval/[i] objval/[i]
+                              if subres is not True:
+                                  break
+                          else:
+                              subres = True
+                          subres
+                      # }}}
+
+                  elif pattval isa dict:
+                      # {{{ recursively try \ismatch on values in the dict
+                      if len pattval != len objval:
+                          ": length mismatch: (pattern---actual)\n%s\n---\n%s"
+                              % (pattval, objval)
+                      else:
+                          for k in pattval:
+                              try:
+                                  objsubval = objval/[k]
+                              except:
+                                  subres = ": key %r not in:\n%r" % (k, objval)
+                                  break
+                                  
+                              sublocname = "/%s" % k
+                              subres = ismatch sublocname pattval/[k] objsubval
+                              if subres is not True:
+                                  break
+                          else:
+                              subres = True
+                          subres                          
+                      # }}}
+                          
+                  elif pattval isa types.FunctionType:
+                      if pattval objval:
+                          True
+                      else:
+                          ": test failed for:\n%r" % (objval,)
+
+                  elif pattval isa sre._pattern_type:
+                      if pattval.search (str objval):
+                          True
+                      else:
+                          ": regex does not match:\n%r" % (objval,)
+
+                  else:
+                      pattval == objval or
+                           ": not equal: (pattern---actual)\n%r\n---\n%r"
+                               % (pattval, objval)
+
+            if res is True:
+                True
+            else:
+                if locname == '/*': res else: locname + res
+        # }}}
+        
+        if pattval is Pattern.isTrue:
+            bool objval or locname + ": %s is not True" % objval
+        else:
+            ismatch locname pattval objval
+    # }}}
+
+    # {{{ def testSubs self x:
+    def testSubs self x:
+        for t in self.subtests:
+            res = self.testSub t x
+            if res is not True:
+                return res
+        True
+    # }}}
+
+    # {{{ def test self x:
+    def test self x:
+        for test in self.testType, self.testSubs, self.testObj:
+            res = test x
+            if res is not True:
+                return res
+        True
+    # }}}
+# }}}
+
+# {{{ forward deflangs
+deflang testlang(stdlang):
+deflang expectations(testlang):
+deflang groupexpectations(expectations):
+# }}}
+
+deflang testlang(stdlang):
+
+    setlang testlang
+    
+    # {{{ test pattern
+    defop 0 "{:"
+        $typ:("*"|term ["!"])
+        $subtests:( $loc:( <indexer> "/" term
+                         | <elems>   "/*" 
+                         | <attr>    symbol
+                         )
+                    $val:( <compare>   "="  term
+                         | <recompare> "=/" freetext /[^\/\\]*(?:\\.[^\/\\]*)*/ "/"
+                         | <isTrue>    "?"  
+                         )
+                  | term
+                  )*
+        $obtest:["&" expr]
+        "}"
+        
+        # {{{ macro typ=None subtests=None obtest=None:
+        macro typ=None subtests=None obtest=None:
+            setlang logix.stdlang
+            if typ == '*':
+                theType = strict = None
+            else:
+                theType, strict = typ
+
+            module = `logix.lmodules/['ltest.testlang']
+
+            anonIndex = 0
+            testpairs = listfor test in subtests or []:
+                if test isa logix.flist and test.hasField 'loc':
+                    lockind = if test/loc isa str:
+                                  test/loc
+                              else:
+                                  test/loc/0
+                                  
+                    val = if test/val == ~isTrue:
+                              `\module .Pattern.isTrue
+                          elif test/val/[0] == ~recompare:
+                              `\@.re.compile \(test/val/1)
+                          else:
+                              test/val/1
+
+                else:
+                    lockind = 'anon'
+                    val = test
+
+                loc = if lockind == 'attr':
+                          str test/loc/1
+                      elif lockind == 'indexer':
+                          l = test/loc/1
+                          assert l isa (logix.Symbol, int, str),
+                                 "not a valid key: %s" % l
+                          "/%s" % l
+                      elif lockind == 'elems':
+                          "/*"
+                      elif lockind == 'anon':
+                          loc = "/%s" % anonIndex
+                          anonIndex += 1
+                          loc
+                `\loc,\val
+
+            testfunc = if obtest: `{\obtest} else: None
+
+            `\@.Pattern \theType \strict [\*testpairs] \testfunc
+        # }}}
+    # }}}
+
+    # {{{ mock objects
+    defop 0 "expect" expr@expectations func x: x
+    
+    # {{{ defop 0 "mob" 
+    defop 0 "mob" $klass:["(" expr ")"]
+                  $expecting:expr@expectations
+        func expecting klass=None:
+            setlang stdlang
+            makemob '<anon>' expecting klass
+    # }}}
+
+    # {{{ defop 0 "defmob" 
+    defop 0 "defmob" $name:term
+                     $classx:["(" expr ")"]
+                     $expectingx:expr@expectations
+        macro name expectingx classx=None:
+            assert name isa logix.Symbol
+            `\name = \@.makemob \(str name) \expectingx \classx
+    # }}}
+
+    # {{{ defop 0 "mobgroup" 
+    defop 0 "mobgroup" $mocks:($name:symbol $classx:["(" expr ")"])+
+                       "expecting" $expectx:expr@groupexpectations
+        macro mocks expectx:
+            setlang stdlang
+
+            gensyms group mob groupexpects
+            names = [m/name for m in mocks]
+            mockxs = listfor mock in mocks:
+                name = mock/name
+                classx = mock.get('classx')
+                `\name = \@.makemob \(str name) klass=\classx
+            `do:
+                \*mockxs
+                \groupexpects = \expectx
+                \group = \@.MobGroup \groupexpects
+                for \mob in \names:
+                    \mob .__mobdict__.expectation = \groupexpects
+                    \mob .__mobdict__.state = \group .state
+                \group
+    # }}}
+
+    # {{{ defop 0 "testmobgroup" expr ":" block macro expectx body:
+    defop 0 "testmobgroup" expr ":" block
+        macro groupx body:
+            gensyms exp
+            `do:
+                \exp = \groupx
+                do: \*body
+                \exp .confirmdone()
+    # }}}
+    # }}}
+
+    # {{{ defs
+    defop 0 "defgroup" $disabled:['X'] $name:symbol ":" $body:block
+        macro name body disabled=False:
+            name2 = ~('test_'+name)
+            if disabled:
+                `\@.theRunner.maybeNotifyDisabled \(str name2)
+            else:
+                `do:
+                    \(testlang.groupfunc name2 body)
+                    \@.theRunner.mayberungroup \name2
+
+    defop 0 "deftest" $disabled:['X'] $name:symbol ":" $body:block
+        macro name body disabled=False:
+            name2 = ~('test_'+name)
+            if disabled:
+                `\@.theRunner.maybeNotifyDisabled \(str name2)
+            else:
+                `do:
+                    def \name2:
+                        \*body
+                    \@.theRunner.mayberuntest \name2
+
+    defop 0 "defsuite" symbol ":" block
+        macro name *body:
+            tests = ~('#ltest.tests')
+            `do:
+                \(testlang.groupfunc tests body)
+                def \name *args **kw:
+                   \@.runtests \tests *:args **:kw
+
+
+    #defop 0 "defmoduletest" $name:term ":" block
+
+    #defop 0 "defclasstest" $name:term ":" block
+
+    #defop 0 "deffunctest" $name:term ":" block
+
+    # {{{ def groupfunc name body:
+    def groupfunc name body:
+        defg = ``defgroup
+        deft = ``deftest
+
+        subNames = [str line/name for line in body if line isa (defg, deft)]
+        for s in subNames:
+            assert subNames.count s == 1, "duplicate test name: %s" % s
+        `do:
+            def \name:
+                \*body
+            \name .subs = \subNames
+    # }}}
+    # }}}
+
+    # {{{ test operators
+    defop 5 expr "?" func x:
+        if x: theRunner.assertPass()
+        else: theRunner.assertFailure()
+
+    defop 5 expr "?!" func x:
+        if x: theRunner.assertFailure()
+        else: theRunner.assertPass()
+
+    defop 5 expr "?=" expr func l r:
+        if l == r:
+            theRunner.assertPass()
+        else:
+            theRunner.assertFailure
+                ("Not equal (left---right):\n%r\n---\n%r" % (l, r))
+
+    defop 5 expr "?!=" expr func l r:
+        if l != r: runner.theRunner.assertPass()
+        else: theRunner.assertFailure ("Equal:\n%r\n---\n%r" % (l, r))
+
+    defop 5 expr "??" expr
+        func obj patt:
+            if patt isa Pattern:
+                res = patt.test obj
+                if res is True:
+                    theRunner.assertPass()
+                else:
+                    msg = "Pattern failure for:\n%r\n------\n%s" % (obj, res)
+                    theRunner.assertFailure(msg)
+            else:
+                theRunner.assertFailure ("%r is not a test pattern" % patt)
+
+    defop 5 expr "?raises" expr
+        macro expr pattx:
+            gensyms res e
+            `try:
+                \res = \expr
+             except:
+                 \e = \@.sys.exc_info()/1
+                 \@.theRunner.traceback = \@.sys.exc_info()/2
+                 \e ?? \pattx
+             else: \@.theRunner.assertFailure ("Expected exception.\nGot %r" % \res)
+    # }}}
+
+deflang expectations(testlang):
+
+    # {{{ defop 50 expr "=" expr macro namex valuex:
+    defop 50 expr "=" expr macro namex valuex:
+        setlang stdlang
+        namex2 = if namex isa logix.Symbol: str namex else: namex
+        `\@.AttrSet \namex2 \valuex
+    # }}}
+
+    # {{{ defop 50 expr "->" expr macro lhs resultx:
+    defop 50 expr "->" expr macro lhs resultx:
+        setlang stdlang
+        if lhs isa stdlang.__impl__.getContinuationOp():
+            # a method-call expectation
+            methodName = lhs/0
+            assert methodName isa logix.Symbol
+
+            name = str methodName
+            args = logix.opargs lhs /[1:]
+            kws = logix.opfields lhs
+            `\@.methodCallExpectation \name \args \kws \resultx
+
+        elif lhs isa ``():
+            #a no-arg method call expectation
+            methodName = lhs/0
+            assert methodName isa logix.Symbol
+            name = str methodName
+            `\@.methodCallExpectation \name [] [:] \resultx
+
+        else:
+            # a property get expectation
+            namex = if lhs isa logix.Symbol: str lhs else: lhs
+            `\@.AttrGet \namex \resultx
+    # }}}
+
+    # {{{ defop 50 "/" expr ( "=" <set> | "->" <get>) expr
+    defop 50 "/" expr ( "=" <set> | "->" <get>) expr
+        macro keyx kind valx:
+            setlang stdlang
+            keyx2 = if keyx isa logix.Symbol: str keyx else: keyx
+
+            if kind == ~set:
+                assert 0, 'item set not implemented'
+            else:
+                `\@.ItemGet \keyx \valx
+    # }}}
+
+    # {{{ compound expectations
+    defop 30 expr "*" func exp: Rep exp
+    defop 30 expr "+" func exp: Rep1 exp
+    # Opt not implemented: defop 30 expr "?" func exp: Opt exp
+
+    defop 0 "seq:" block func *exps: Seq exps
+    defop 0 "par:" block func *exps: Par exps
+
+    defop 20 expr ';'  expr (';' expr)*  func *expects: Seq expects
+    defop 20 expr '||' expr ('||' expr)* func *expects: Par expects
+    defop 20 expr '|'  expr ('|' expr)*  func *expects: Choice expects
+    # }}}
+
+    defop 0 "like" expr func mobj: mobj.__mobdict__.expectation
+
+    defop 20 expr ":debug" func exp: DebugExpectation exp
+
+deflang groupexpectations(expectations):
+
+    # {{{ defop 40 expr "." expr macro mockx expectingx:
+    defop 40 expr "." expr macro mockx expectingx:
+        setlang stdlang
+        # treat a plain function-call as a method-call-expectation (returning None)
+        expx = if expectingx isa (logix.CallFunction, ``()):
+                   (:expectations `\expectingx -> None)
+               else:
+                   expectingx
+
+        `\@.ObjectExpectation \mockx \expx
+    # }}}
+
+    # {{{ defop 40 expr "/" expr ( "=" <set> | "->" <get>) expr
+    defop 40 expr "/" expr ( "=" <set> | "->" <get>) expr
+        macro mockx keyx kind valx:
+            setlang stdlang
+            keyx2 = if keyx isa logix.Symbol: str keyx else: keyx
+
+            expx = if kind == ~set:
+                       assert 0, 'item set not implemented'
+                   else:
+                       `ItemGet \keyx \valx
+
+            `\@.ObjectExpectation \mockx \expx
+    # }}}
+
+# {{{ def runtests(tests, select=None, verbose=False, informQuit=False):
+def runtests tests select=None verbose=False informQuit=False:
+    global theRunner
+    theRunner = TestRunner tests
+    return theRunner.run select verbose informQuit
+# }}}

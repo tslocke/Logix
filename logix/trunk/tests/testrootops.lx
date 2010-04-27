@@ -1,0 +1,104 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# {{{ init
+setlang logix.stdlang
+
+import re
+import itertools
+import new
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+    def debugmode x:
+
+limport ltest.testlang
+setlang testlang.testlang
+
+import devlogix
+from devlogix import rootops
+from devlogix import data
+# }}}
+
+defop 200 "~" symbol macro s: ` \@.data.Symbol "" \(str s)
+
+defsuite main:
+
+    debugmode 0
+
+    defgroup syntaxlang:
+
+        rl = rootops.makeSyntaxlang None ''
+
+        def parse s: rl.__impl__.parse s /0
+
+        def rulep opname *args:
+            op = data.Symbol rootops.syntaxlang_ns opname
+            {:op /*=args}
+
+        # {{{ deftest basics:
+        deftest basics:
+            parse '"a"' ?? rulep '"' 'a'
+            parse "'a'" ?? rulep "'" 'a'
+            parse 'expr' ?? rulep "expr"
+            parse 'expr@l' ?? rulep "expr" ~l
+            parse 'term' ?? rulep "term"
+            parse 'term@l' ?? rulep "term" ~l
+            parse 'block' ?? rulep "block"
+            parse 'block@l' ?? rulep "block" 'lang' ~l
+            parse '<foo>' ?? rulep "<" ~foo
+            parse 'debug()' ?? rulep "debug"
+            parse 'debug(1)' ?? rulep "debug" 1
+            parse 'symbol' ?? rulep "symbol"
+        # }}}
+
+        # {{{ deftest compound:
+        deftest compound:
+            parse 'term term' ?? rulep "seq" (rulep "term") (rulep "term")
+
+            parse '"a"*' ?? rulep "*" (rulep '"' 'a')
+
+            parse '"a"+' ?? rulep "+" (rulep '"' 'a')
+
+            parse '["a"]' ?? rulep "[" (rulep '"' 'a')
+            parse '["a"]/a' ?? rulep "[" (rulep '"' 'a') ~a
+            parse '["a"]/-' ?? rulep "[" (rulep '"' 'a') {:object}
+
+            parse '"a" | "b" | "c"'
+                ?? rulep "|" *:[rulep '"' x for x in 'a','b','c']
+
+            parse '$foo:expr' ?? rulep '$' ~foo (rulep "expr")
+            parse '$:expr' ?? rulep '$' data.none (rulep "expr")
+
+            parse "symbol:expr" ?? rulep 'symbol:' (rulep "expr")
+
+            parse "block:expr" ?? rulep "block" 'rule' (rulep "expr")
+        # }}}
+
+        # {{{ deftest freetext:
+        deftest freetext:
+            parse 'freetext /a/' ?? rulep "freetext" data.false 'a'
+            parse 'freetext upto /a/' ?? rulep "freetext" "upto" 'a'
+            print parse 'optext /a/'
+            parse 'optext /a/' ?? rulep "optext" data.false 'a'
+            parse 'optext oneline /a/' ?? rulep "optext" 'oneline' 'a'
+            parse 'optext foo /a/' ?? {:* data.false 'a' /(~lang)=(~foo)}
+        # }}}
+            

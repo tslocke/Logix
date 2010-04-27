@@ -1,0 +1,28 @@
+limport ltest.testlang
+setlang testlang.testlang
+
+deftests:
+    print "Setup"
+    empty = ""
+    one = "a"
+    a = "ho hum"
+
+    deftest append:
+        print "test: append"
+        empty + "!" ?= "!"
+        one + "!"   ?= "a!"
+        a + "!"     ?= "ho hum!"
+
+    deftest count:
+        print "test: append"
+        empty.count 'x' ?= 0
+
+        one.count 'a' ?= 1
+        one.count 'b' ?= 0
+
+        a.count 'x' ?= 0
+        a.count 'o' ?= 1
+        a.count 'h' ?= 2
+
+    print "Teardown"
+    print 

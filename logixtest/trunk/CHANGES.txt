@@ -1,0 +1,59 @@
+------0.4--------
+
+defsuite
+
+    The top-level deftests operator has become defsuite:
+
+        defsuite main:
+
+            deftest stuff:
+                ...
+
+    Whereas before the deftests operator created a function called
+    run (called to run the tests), defsuite creates a function of
+    the given name (call to run that test suite). Multiple test
+    suites in a single file are therefore possible.
+
+    The "filter" parameter to this method has been renames to
+    "select".
+
+
+Polite to your name-space
+
+    The deftests operator used to import a large number of names
+    into the current namespace. This is no longer the case. Values
+    you may need are available via the testlang module, e.g.:
+
+        testlang.confirmdone(mockObject)
+
+
+?raises
+
+    The ?exception operator has been renamed to ?raises. A bug has
+    also been fixed wherein stack traces reported by this operator
+    were sometimes incorrect.
+
+
+Debugging calls to mock objects
+
+    The postfix operator ":debug" has been added to the mock-object
+    expectation language. Putting this operator on the end of an
+    expectation drop you in to the debugger when that expectation
+    is met (e.g. when the code under test calls a certain method,
+    gets an attribute, etc.). Very useful!
+
+    Example:
+        defmob foo par:
+            f() -> None :debug
+            ...
+
+
+Notification of disabled tests
+
+    When a test or group has been disabled, e.g.:
+
+        deftest X myTest: ...
+
+    The test runner reports this even when not in verbose
+    mode. (So users don't forget a test has been disabled and gain
+    false confidence that the tests are all passing.)

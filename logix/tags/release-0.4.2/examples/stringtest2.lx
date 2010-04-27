@@ -1,0 +1,42 @@
+limport ltest.testlang
+setlang testlang.testlang
+
+deftests:
+    print "Setup"
+    empty = ""
+    one = "a"
+    a = "ho hum"
+
+    deftest append:
+        print "In test: append"
+        empty + "!" ?= "!"
+        one + "!"   ?= "a!"
+        a + "!"     ?= "ho hum!"
+
+    deftest count:
+        print "In test: count"
+        empty.count 'x' ?= 0
+
+        one.count 'a' ?= 1
+        one.count 'b' ?= 0
+
+        a.count 'x' ?= 0
+        a.count 'o' ?= 1
+        a.count 'h' ?= 2
+
+    defgroup unicode:
+        print "Setup unicode"
+        uempty = unicode empty
+        uone = unicode one
+        ua = unicode a
+
+        deftest backToStr:
+            print "In test: backToStr"
+            str uempty ?= empty
+            str uone   ?= one
+            str ua     ?= a
+
+        print "Teardown unicode"
+
+    print "Teardown"
+    print 

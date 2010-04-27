@@ -1,0 +1,77 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+
+setlang logix.stdlang
+
+import itertools
+import os
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+
+limport testparser
+limport testlanguage
+limport testrootops
+limport testmacros
+limport testsyntaxlang
+limport testsyntax
+
+limport testbaselang
+limport testlanglang
+limport teststdlang
+
+limport inttest
+
+def run:
+    # {{{ ensure base and std get rebuilt
+    import devlogix
+    if hasattr devlogix 'baselang':
+        del devlogix.baselang
+        del devlogix.lmodules/['devlogix.base']
+
+    if hasattr devlogix 'stdlang':
+        del devlogix.stdlang
+        del devlogix.lmodules/['devlogix.std']
+    if os.path.exists "devlogix/std.lxc":
+        os.remove "devlogix/std.lxc"
+    # }}}
+    
+    tests = [testparser,
+             testlanguage,
+             testrootops,
+             testmacros,
+             testsyntaxlang,
+             testsyntax,
+
+             inttest,
+             
+             testlanglang,
+             testbaselang,
+             teststdlang]
+
+    dir = os.path.dirname __file__
+    filecount = len (os.listdir dir ?> {it.endswith ".lx"}) - 1
+        
+    for test in tests:
+        print test.__name__
+        quit = test.main informQuit=True
+        if quit: break
+        print

@@ -1,0 +1,116 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+
+# {{{ init
+setlang logix.stdlang
+
+import re
+import itertools
+import new
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+    def debugmode x:
+
+limport ltest.testlang
+setlang testlang.testlang
+
+import devlogix
+from devlogix import language
+# }}}
+
+defsuite main:
+
+    debugmode 0
+
+    defgroup Language:
+
+        Lang = language.Language
+
+        lang = Lang 'testinglang' .__impl__
+        l2 = Lang 'l2' lang.userlang .__impl__
+
+        # {{{ def addop token:
+        def addop token:
+            g = mobgroup op rule expecting par:
+                op.token -> token *
+                op.language -> (^lang.userlang) *
+                op.leftRule -> None *
+                op.rightRule -> rule *
+                op.binding -> 0 *
+                rule.allLiterals() -> []
+                
+            lang.addOp op
+            g.confirmdone()
+        # }}}
+
+        # {{{ deftest derevied:
+        deftest derevied:
+            d = Lang 'd' lang.userlang .__impl__
+
+            d in lang.derivedLanguages()
+                and l2 in lang.derivedLanguages() ?true
+
+            # break cycle:
+            d.userlang.__impl__ = None
+            del d
+            lang.derivedLanguages() ?= [l2]
+        # }}}
+
+        # {{{ deftest addOp:
+        deftest addOp:
+            addop '+'
+        # }}}
+                
+        # {{{ deftest matchToken:
+        deftest matchToken:
+            addop '+'
+            addop '++'
+            lang.matchToken "+" 0 .end() ?= 1
+            lang.matchToken "++" 0 .end() ?= 2
+        # }}}
+
+        # {{{ deftest parse:
+        deftest parse:
+            lang.parse '1' ?? {:* /*=[1]}
+
+            import StringIO
+            lang.parse (StringIO.StringIO '1') ?? {:* /*=[1]}
+
+            lang.parse 1 ?raises {:*}
+        # }}}
+
+        # {{{ deftest continuationOp:
+        deftest continuationOp:
+            con = language.Operator (mob token -> "DUMMY") lang.userlang
+            lang.continuationOp = con
+
+            l2.getContinuationOp() ?= con
+        # }}}
+
+        # {{{ deftest tokenMacros:
+        deftest tokenMacros:
+            lang.setTokenMacro 'number' {it*2}
+            lang.parse '1' ?? {:* /*=[2]}
+
+            # inheritence
+            l2.parse '1' ?? {:* /*=[2]}
+        # }}}

@@ -1,0 +1,290 @@
+setlang logix.baselang
+
+try:
+    from livedesk.util import debug, debugmode, dp
+except ImportError:
+
+import re
+
+synl = logix.syntaxlang
+
+# {{{ def makeDoc(tag, props, elements, markup=None):
+def makeDoc(tag, props, elements, markup=None):
+    # {{{ tagx = 
+    tagx = if isinstance(tag, str):
+               s = re.sub(r"\\(.)", r"\1", tag).rstrip()
+               sym = logix.Symbol.fromStr(s)
+               ` ` \\sym
+           else:
+               tag
+    # }}}
+               
+    # {{{ propDict = 
+    propDict = logix.Doc(logix.dictOp)
+    for prop in props:
+        if logix.isDoc(prop, logix.doc):
+            # It's an "x=y" or a function property
+            propNamex = if isinstance(prop[0], str):
+                            s = logix.Symbol.fromStr(prop[0])
+                            ` ` \\s
+                        else:
+                            # It's a "(foo)=..." form
+                            prop[0]
+            propValx = if prop[1] == "(":  
+                           # it's a function
+                           fn = `lambda: do: \*(prop["body"])
+                           fn["args"] = logix.plaindoc([[arg] for arg in prop["args"]])
+                           # TODO: Set the __name__ of these lambdas to the property name
+                           fn
+                       elif isinstance(prop[1], str):
+                            s = logix.Symbol.fromStr(prop[1])
+                            ` ` \\s
+                       else:
+                           prop[1]
+            propDict.append(logix.plaindoc([propNamex, propValx]))
+            
+        else:
+            # it's a "-foo" type property (val defaults to logix.true)
+            propx = if isinstance(prop, str):
+                        s = logix.Symbol.fromStr(prop)
+                        ` ` \\s
+                    else:
+                        # It's a "-(foo)" form
+                        prop
+            propDict.append(logix.plaindoc([propx, logix.true]))
+    # }}}
+
+    d = logix.gensym("d")
+
+    # {{{ elemxs = 
+    elemxs = [if isinstance(elem, str):
+                  s = logix.Symbol.fromStr(elem)
+                  `\d .append(`\\s)
+              elif logix.isDoc(elem, logix.Symbol("doclang", "(*")):
+                  `\d .extend( \(elem[0]))
+              else:
+                  `\d .append(\elem)
+              for elem in elements]
+            
+    if markup is not None:
+        for m in markup:
+            elemxs.append(`\d.append(\m))
+    # }}}
+    
+    return `do: 
+                \d = logix.Doc(\tagx, \propDict)
+                \*elemxs
+                \d
+# }}}
+
+# {{{ def makeLocation(parts, abs, tag):
+def makeLocation(parts, abs, tag):
+    partlist = []
+    for part in parts:
+        k = part[0]
+        s = part[1]
+        kind = if k == ".":
+                   `logix.Location.property
+               elif k == "/":
+                   `logix.Location.element
+               elif k == "/&":
+                   `logix.Location.elementId
+                      
+        sym = if s.startswith('"'):
+                  ``\\(logix.Symbol.fromStr(s[1:]))
+              elif s == "(":
+                  part[2]
+              else:
+                  if k == "/":
+                      try:
+                          x = int(s)
+                      except ValueError:
+                          x = ``\\(logix.Symbol.fromStr(s))
+                  else:
+                      x = ``\\(logix.Symbol.fromStr(s))
+                  x
+            
+        partlist.append(logix.Doc(logix.Symbol("lx", "tuple"), [kind, sym]))
+    if tag:
+        partlist.append(logix.Doc(logix.Symbol("lx", "tuple"), [(`logix.Location.tag), `None]))
+    if abs:
+        `logix.Location([\*partlist]).asAbsolute()
+    else:
+        `logix.Location([\*partlist])
+# }}}
+        
+# {{{ def makeSyntax(inDoclang):
+def makeSyntax(inDoclang):
+    langexpr = if inDoclang: (:synl expr@^) else: (:synl expr)
+    langblock = if inDoclang: (:synl block@^) else: (:synl block)
+    docexpr = if inDoclang: (:synl expr) else: (:synl expr@doclang)
+    docsymbol = (:synl ( '~' '"' freetext /[^"\\]*(?:\\.[^"\\]*)*/ '"'
+                       | freetoken /[a-zA-Z_][a-zA-Z0-9_.-]*(?:\:[a-zA-Z0-9\/_.-]+)?/
+                       ) )
+
+    propsSyn = (:synl "-" ( "(" langexpr ")" | docsymbol)
+                    | ( "(" langexpr ")" | docsymbol )
+                      ( freetext /\(/ # use freetext rather than "(" to dissallow whitespace
+                        $args:symbol*
+                        ")" ":" $body:langblock
+                      | "="
+                        ( "(" langexpr ")" # This looks unnecessary - taken care of
+                                           # {{{ by
+                                           # by the "()" op in doclang
+                                           # But in fact the "(" at the start of
+                                           # the rep breaks this
+                                           # (see testsyntax.language.rep)
+                                           # This causes a nasty problem when
+                                           # parsing a property like a=(*b)
+                                           # That should parse as an invalid splice,
+                                           # but gets treated as a
+                                           # partially applied '*' inside parens
+                                           # }}}
+                        | docsymbol
+                        | docexpr
+                        )))
+
+    elementsSyn = (:synl docsymbol | docexpr)
+
+    markupSyn = if inDoclang:
+                    (:synl optext "{" /(?=\(=|})/
+                           ( "(=" expr@^ ")" optext "{" /(?=\(=|})/ )* )
+                else:
+                    (:synl optext doclang "{" /(?=\(=|})/
+                           ( "(=" expr ")" optext doclang "{" /(?=\(=|})/ )* )
+
+    docsyn = (:synl $tag:( "(" langexpr ")"
+                         | freetext /[^:;}\s\\]*(?:\\.[^:;}\s\\]*)*(?:\:[^;}\s\\]*(?:\\.[^;}\s\\]*)*)?/
+                         )
+              
+                    $props:propsSyn*
+                    $elements:elementsSyn*
+                    $markup:[ ";" markupSyn ]
+                    "}" )
+
+    plaindocsyn = (:synl $props:propsSyn* $elements:elementsSyn* "]")
+
+    locpart = (:synl ( freetext /\(/ langexpr ")"
+                     | freetext /"[^"\\]*(?:\\.[^"\\]*)*/ '"'         #'
+                     | freetext /[a-zA-Z0-9_]+(?:\:[a-zA-Z0-9_]+)?/
+                     ) )
+
+    docsyn, plaindocsyn, locpart
+# }}}
+    
+# {{{ deflang doclang:
+deflang doclang:
+
+    docsyn, plaindocsyn, locpart = makeSyntax(True)
+
+    defop 0 "{" docsyn macro *a **kw: makeDoc(*a, **kw)
+    
+    defop 0 "[" plaindocsyn macro props elements: makeDoc(str(logix.doc), props, elements)
+
+    defop 0 '"' freetext /[^"\\$]*(?:\\.[^"\\$]*)*/
+            ( ( "$" symbol | "$(" expr@^ ")" ) freetext /[^"\\$]*(?:\\.[^"\\$]*)*/ )*
+            '"'
+        macro *parts:
+            doclang.interpolateString('"', parts)
+
+    defop 0 "'" freetext /[^'\\$]*(?:\\.[^'\\$]*)*/
+            ( ( "$" symbol | "$(" expr@^ ")" ) freetext /[^'\\$]*(?:\\.[^'\\$]*)*/ )*
+            "'"
+        macro *parts:
+            doclang.interpolateString("'", parts)
+
+    defop 0 "(" expr@^ ")" macro ex: ex
+
+    defop 0 "(*" expr@^ ")"
+        macro ex:
+            raise SyntaxError, "invalid splice"
+            # Correct usage is handled in makeDoc
+
+    defop 0 "." ( $tag:freetext /\[tag\]/
+                | $:locpart $:(freetext /\.|\/&?/ locpart)* $tag:[freetext /\.\[tag\]/]
+                )
+        macro *parts **kw:
+            if len(parts) == 0:
+                # It's ".[tag]"
+                makeLocation([], False, True)
+            else:
+                head = if isinstance(parts[0], logix.Doc):
+                           (".",) + tuple(parts[0])
+                       else:
+                           (".", parts[0])
+                makeLocation([head] + list(parts[1:]), False, bool(kw.get("tag")))
+
+    defop 0 "/" [$first:[freetext /&|\/&?|\./]
+                 $:locpart
+                 $:(freetext /\.|\/&?/ locpart)*]/-
+                $tag:[freetext /\.\[tag\]/]
+                
+        macro *parts **kw:
+            if len(parts) == 0:
+                makeLocation([], True, False)
+            else:
+                part0 = parts[0]
+                rest = parts[1:]
+                first = kw.get("first")
+                abs = first and (first.startswith("/") or first.startswith("."))
+                firstKind = if first == "&":
+                                "/&"
+                            elif first == None:
+                                "/"
+                            else:
+                                first
+                head = if isinstance(part0, logix.Doc):
+                          (firstKind,) + tuple(part0)
+                      else:
+                          (firstKind, part0)
+                makeLocation([head] + list(rest), bool(abs), bool(kw.get("tag")))
+
+    def interpolateString(quote, parts):
+        res = ''
+        vals = []
+        for part in parts:
+            if isinstance(part, str):
+                # use eval to handle \n etc
+                res += eval(quote + part + quote).replace('%', '%%').replace("\\$", "$")
+            else:
+                res += "%s"
+                vals.append(part)
+        if len(vals) == 0:
+            res.replace("%%", "%")
+        else:
+            `\res % \(logix.Doc(logix.Symbol("base", ","), vals))
+
+    
+# }}}
+
+# {{{ deflang docops:
+deflang docops:
+    # This language is designed to be imported into a general programming language
+    # i.e. `getops doclang.docops`
+
+    docsyn, plaindocsyn, locpart = makeSyntax(False)
+
+    defop 0 "D{" docsyn macro *a **kw: makeDoc(*a, **kw)
+    
+    defop 0 "D[" plaindocsyn macro props elements: makeDoc(str(logix.doc), props, elements)
+
+    defop 0 "@" [ $:(freetext /\/\/&?|\/\.|\/&?|\./ locpart) $:(freetext /\.|\/&?/ locpart)*
+                | freetext /\//
+                ]/-
+                $tag:[freetext /\.\[tag\]/]
+        macro *parts **kw:
+            tag = bool(kw.get("tag"))
+            if len(parts) == 0:
+                if tag:
+                    makeLocation([], False, True)
+                else:
+                    raise SyntaxError, "invalid location"
+            elif parts[0] == "/":
+                makeLocation([], True, tag)
+            else:
+                first = parts[0][0]
+                abs = first.startswith("/.") or first.startswith("//")
+                if abs:
+                    parts[0][0]= parts[0][0][1:]
+                makeLocation(parts, bool(abs), tag)
+# }}}

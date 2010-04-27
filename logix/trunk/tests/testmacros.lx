@@ -1,0 +1,207 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# {{{ init
+setlang logix.stdlang
+
+import re
+import itertools
+import new
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+    def debugmode x:
+
+limport ltest.testlang
+setlang testlang.testlang
+
+import devlogix
+from devlogix import macros, data, language, rootops
+from devlogix.util import attrdict
+
+from devlogix.data import Doc
+
+# }}}
+
+defop 200 "~" symbol macro s: ` \@.data.Symbol "" \(str s)
+
+defsuite main:
+
+    debugmode 0
+
+    defgroup macros:
+
+        lang = language.Language "TEST"
+
+        def mkop tok:
+            op = language.Operator (attrdict token=tok) lang
+            lang.__impl__.operators/[op.token] = op
+            op
+
+        def doc op *args **kws:
+            data.Doc op.symbol args kws
+
+        # {{{ deftest expand:
+        deftest expand:
+            a = mkop 'a'
+            a.macro = {|"expanded"}
+
+            macros.expand (doc a) ?= 'expanded'
+        # }}}
+
+        # {{{ deftest lineno:
+        deftest lineno:
+            a = mkop 'a'
+            d = doc a
+            d.lineno = 12
+            exp = macros.expand(d)
+            exp.lineno ?= 12
+        # }}}
+
+        # {{{ defgroup expansion:
+        defgroup expansion:
+
+            x = mkop 'x'
+            y = mkop 'y'
+
+            a = mkop 'a'
+            a.macro = {doc x it}
+
+            b = mkop 'b'
+            b.macro = {doc y it}
+
+            nested = mkop 'nested'
+            nested.macro = {doc a it}
+
+            f = mkop 'f'
+            g = mkop 'g'
+
+            # {{{ deftest basics:
+            deftest basics:
+                macros.expand (doc a 1) ?? {:x.symbol 1}
+                macros.expand (doc b 1) ?? {:y.symbol 1}
+            # }}}
+
+            # {{{ deftest macroInside:
+            deftest macroInside:
+                macros.expand (doc f (doc a 2)) ?? {:f.symbol {:x.symbol 2}}
+
+                macros.expand (doc f field=(doc a 2)) ?? {:f.symbol /field={:x.symbol 2}}
+                
+                macros.expand (doc f field=(doc g (doc a 2))) ?? {:f.symbol /field={:g.symbol {:x.symbol 2}}}
+                    
+                macros.expand (doc f (doc a 1) (doc b 2)) ?? {:f.symbol {:x.symbol 1} {:y.symbol 2}}
+
+            # }}}
+            
+            # {{{ deftest lineno:
+            deftest lineno:
+                gop = doc g 10
+                gop.lineno = 99
+                
+                macros.expand (doc f (doc a gop))
+                    ?? {:f.symbol {:x.symbol {:g.symbol 10 lineno=99}}}
+
+            # }}}
+
+            # {{{ deftest nestedMacro:
+            deftest nestedMacro:
+                macros.expand (doc nested 9) ?? {:x.symbol 9}
+                macros.expand (doc f (doc nested 2)) ?? {:f.symbol {:x.symbol 2}}
+            # }}}
+    
+            # {{{ defgroup quote:
+            defgroup quote:
+                rootops.makeQuotelang None None
+                
+                q = rootops.quote
+                e = rootops.escape
+
+                deftest simple:
+                    macros.expand (Doc q [doc a 1]) ?? {:q {:a.symbol 1}}
+
+                deftest escape:
+                    macros.expand (Doc q [doc f (doc a 1) (Doc e [doc a 1])])
+                        ?? {:q {:f.symbol {:a.symbol 1}
+                                          {:e {:x.symbol 1}}}}
+
+                    macros.expand (Doc q [Doc q [Doc e [doc a 1],
+                                                 Doc e [doc a 1] [~extra:[0]]]])
+                        ?? {:q {: q {:e {:a.symbol 1}}
+                                    {:e /(~extra)={:data.doc 0} {:x.symbol 1}}}}
+            # }}}
+
+            # {{{ deftest context:
+            deftest context:
+                m = mkop 'm'
+                m.macro = {arg __context__|
+                           do:
+                               __context__/a = 'm'
+                               doc x arg
+                          }
+
+                n = mkop 'n'
+                n.macro = {arg __context__|
+                           do:
+                               __context__/a = 'n'
+                               doc x arg
+                          }
+
+                g = mkop 'g'
+                g.macro = {arg __context__|
+                           do:
+                               __context__.setGlobal'a' 'g'
+                               doc x arg
+                          }
+
+                o = mkop 'o'
+                o.macro = {__context__|__context__/a}
+
+                macros.expand (doc m (doc o)) ?? {:x.symbol 'm'}
+                macros.expand (doc n (doc o)) ?? {:x.symbol 'n'}
+
+                macros.expand (doc n (doc m (doc o))) ?? {:x.symbol {:x.symbol 'm'}}
+
+                macros.expand (doc g (doc o)) ?? {:x.symbol 'g'}
+                macros.expand (doc g (doc m (doc o))) ?? {:x.symbol {:x.symbol 'm'}}
+
+                # The second O also get's the context even though it's
+                # not contained inside the G (because G does a setGlobal)
+                macros.expand (doc x (doc g (doc o))
+                                     (doc o))
+                    ?? {:x.symbol {:x.symbol  'g'} 'g'}
+
+                # Here the first O gets the local value of 'a', the next
+                # one gets the gloabal value
+                macros.expand (doc x (doc g (doc m (doc o)))
+                                     (doc o))
+                    ?? {:x.symbol {:x.symbol  {:x.symbol 'm'}} 'g'}
+                # }}}
+
+            # {{{ deftest splice:
+            deftest splice:
+                s = mkop 's'
+                s.macro = {macros.splice [doc x it, doc y it]}
+
+                macros.expand (doc f (doc s 2)) ?? {:f.symbol {:x.symbol 2} {:y.symbol 2}}
+            # }}}
+                
+        # }}}
+    

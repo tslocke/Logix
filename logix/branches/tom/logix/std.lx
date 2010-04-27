@@ -1,0 +1,614 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# {{{ imports
+import re
+import time
+
+try:
+    from livedesk.util import debug
+except ImportError:
+# }}}
+
+limport logix.doclang
+
+getops doclang.docops
+
+base = logix.baselang
+
+deflang std(base):
+deflang argPreconditions(std):
+
+# {{{ deflang interpolatelang:
+deflang interpolatelang(None):
+
+    defop 0 "$$" func: "$"
+
+    defop 0 "$" ( "(" expr@^ ")"
+                | "[" expr@^ ["|" freetext /[^\]]*/ ] "]"
+                | symbol
+                )
+        func *args:
+            if len(args) == 1:
+                args[0]
+            else:
+                joiner = if args[1]:
+                             eval('"%s"' % args[1].replace('"', '\\"'))
+                         else:
+                             ""
+                joiner.join(map(str, args[0]))
+
+    defop 0 '\"' func: '"'
+# }}}
+
+# {{{ deflang std(base):
+deflang std(base):
+
+    # {{{ defop 100 "__continue__"
+    star = '*'
+    dstar = '**'
+    defop 100 "__continue__" ( ( symbol:("=" term) | term )*
+                               [ "**:" $(dstar):term
+                               | "*:"  $(star):term ["**:" $(dstar):term]/-
+                               ]/-
+                             )
+
+        macro *args **kws:
+            logix.Doc(logix.rootops.callOp, args, kws)
+    # }}}
+
+    defop r 5 expr "=" expr macro l r: (:base ` \l = \r)
+
+    defop 0 "(" expr ")" macro x: x
+
+    defop 65 expr "div" expr macro l r: (:base `\l / \r)
+
+    # {{{ defop 85 expr "()"
+    defop smartspace 85 expr "()"
+        macro x: D{lx:call (x)}
+    # }}}
+
+    # {{{ defop 50 expr "isa" ["!"] expr
+    defop 50 expr "isa" $strict:["!"] expr
+        macro obx typx strict=False:
+            if strict: `type(\obx) == \typx
+            else: `isinstance(\obx, \typx)
+    # }}}
+
+    # {{{ defop 50 expr "isdoc" expr func doc tag:
+    defop 50 expr "isdoc" expr func doc tag:
+        if isinstance(doc, logix.BaseDoc):
+            if isinstance(tag, tuple):
+                for t in tag:
+                    if doc.tag == t:
+                        return True
+                else:
+                    return False
+            else:
+                return doc.tag == tag
+        else:
+            return False
+    # }}}
+        
+    # {{{ defop 0 "gensyms" symbol* macro *names:
+    defop 0 "gensyms" symbol* macro *names:
+        for name in names:
+            assert isinstance(name, logix.Symbol)
+        `do: \*[( `\name = logix.gensym( \(str(name)) ) ) for name in names]
+    # }}}
+
+    # {{{ subscript
+    defop smartspace 90 expr "/[" [expr] [":" [expr] [":" expr] ]/- "]"
+        macro objx fromx *rest:
+            if len(rest) == 0:
+                D{lx:subscript (objx) (fromx)}
+            else:
+                tox, stepx = rest
+                D{lx:slice (objx) (fromx) (tox) (stepx)}
+
+    defop smartspace 90 expr "/*[" [expr] [":" [expr] [":" expr] ]/- "]"
+        macro objx fromx *rest:
+            x = logix.gensym('x')
+            elemx = if len(rest) == 0:
+                        D{lx:subscript (x) (fromx)}
+                    else:
+                        D{lx:slice (fromx) (tox) (stepx)}
+            `[\elemx for \x in \objx]
+
+    defop smartspace 90 expr "/" term $q:["?"]
+        macro obj key q=False:
+            if isinstance(key, logix.Symbol):
+                k = str(key)
+            else:
+                k = key
+
+            if q:
+                D{lx:call (`\obj . get) (k)}
+            else:
+                D{lx:subscript (obj) (k)}
+
+    defop smartspace 90 expr "/*" term
+        macro obj key:
+            x = logix.gensym('x')
+            keyx = if isinstance(key, logix.Symbol):
+                       str(key)
+                   elif isinstance(key, int):
+                       key
+                   else:
+                       assert 0, "invalid key"
+                   
+            `[\D{lx:subscript (x) (keyx)} for \x in \obj]
+    # }}}
+
+    # {{{ defop 110 "$" expr
+    defop smartspace 110 "$" expr
+        macro f: `it . \f
+    # }}}
+
+    # {{{ Field access: . .? .* 
+    # {{{ defop smartspace 90 expr "." term
+    defop smartspace 90 expr "." term
+        macro obx fieldx:
+            if isinstance(fieldx, logix.Symbol):
+                `\obx . \fieldx
+            elif logix.isDoc(fieldx, logix.Symbol("", "(")) and
+                 logix.isDoc(fieldx[0], logix.Symbol("", ",")):
+                `getattr(\obx, *\fieldx)
+            else:
+                `getattr(\obx, \fieldx)
+    # }}}
+
+    # {{{ defop smartspace 90 expr ".*" term
+    defop smartspace 90 expr ".*" term
+        macro obx fieldx:
+            x = logix.gensym('x')
+            `[\x .\fieldx for \x in \obx]
+    # }}}
+
+    # {{{ defop smartspace 90 expr ".?" term
+    defop smartspace 90 expr ".?" term
+        macro objx fieldx:
+            ob = logix.gensym('ob')
+            `do:
+              \ob = \objx
+              \ob and \ob . \fieldx
+    # }}}
+    # }}}
+
+    # {{{ "[" ... "]"
+    defop 0 "[" ( "]" <list>
+    
+                | ":" "]" <dict>
+                
+                | expr ( "]" <list>
+                
+                       | ("," expr)+ ["," <>]/- "]" <list>
+
+                       | ":" expr ( ("," expr ":" expr)* "]" <dict>
+                       
+                                  | $quals:("for" expr "in" expr
+                                            $ifs:("if" expr)* )+ "]" <dictcomp>
+                                  )
+                                            
+                       | $quals:("for" expr "in" expr
+                                 $ifs:("if" expr)* )+ "]" <listcomp>
+                                 
+                       | ".." expr "]" <range>
+                       ))
+
+        # {{{ Implementation
+        macro *args **kws:
+            kind = args[-1]
+            els = args[:-1]
+            
+            if kind == 'list':
+                `[ \*els ]
+                    
+            elif kind == 'dict':
+                return D{lx:dict (*zip(els[::2], els[1::2]))}
+                
+            elif kind == 'dictcomp':
+                elemx = `\(els[0]) , \(els[1])
+                comp = D{base:[ quals=(kws['quals']) (elemx) 'comp'}
+                `dict(\comp)
+                
+            elif kind == 'listcomp':
+                D{base:[ quals=(kws['quals'])  (els[0]) 'comp'}
+                
+            elif kind == 'range':
+                frm = els[0]
+                to = els[1]
+                `xrange(\frm, \to + 1)
+                
+            else:
+                assert 0
+        # }}}
+    # }}}
+
+    getops doclang.docops
+    
+    setlang std
+
+    # {{{ "~" (Symbol operator)
+    defop 200 "~" ( "(" expr [":" expr] ")"
+                  | freetext /[a-zA-Z\-_0-9.]+(:[a-zA-Z\-_0-9.]+)?/
+                  | '"' freetext /[^"\\]*(?:\\.[^"\\]*)*/ '"'
+                  | "'" freetext /[^'\\]*(?:\\.[^'\\]*)*/ "'"
+                  )
+
+        func s s2=None:
+            if s2 != None:
+                logix.Symbol s s2
+            else:
+                logix.Symbol.fromStr s
+            
+    # }}}
+
+    # {{{ functions
+    # {{{ funcargs
+    funcargs = (:logix.syntaxlang [ ($:(symbol ["=" term]/-
+                                        $pre:["(" expr@argPreconditions ")"]))*
+                                    [ "*" $star:symbol ["**" $dstar:symbol]/-
+                                    | "**" $dstar:symbol
+                                    ]/-
+                                  ])
+    # }}}
+
+    # {{{ def preconditionTests(funcname, args):
+    def preconditionTests(funcname, args):
+        tests = []
+        for arg in args:
+            if arg isa logix.Doc and arg.hasProperty 'pre':
+                name = arg/0
+                prex = arg/pre
+                gensyms pre
+                test = `do:
+                            \pre = \prex
+                            if (if \pre isa type: not isinstance \name \pre
+                                else: not \pre \name):
+                                raise logix.ArgPreconditionError \funcname
+                                                                 \(str name)
+                                                                 \name
+                tests.append test
+        tests
+    # }}}
+
+    # {{{ defop 0 "{" ( $args:funcargs "|" expr
+    defop 0 "{" ( $args:funcargs "|" expr
+                | expr
+                ) "}"
+
+        macro expr args=None:
+            if args is None:
+                assert not expr isdoc logix.getOp ~"std:|" .symbol,
+                       "invalid lambda (syntax error in arguments)"
+
+                `lambda it: \expr
+            else:
+                lambdaStr = do:
+                                s = str expr
+                                maxlen = 15
+                                "<lambda: %s>" % (if len s > maxlen: s/[:maxlen] + "..."
+                                                  else: s)
+
+                body = `do:
+                             \*(std.preconditionTests lambdaStr args)
+                             \expr
+
+                D{std:lambda args=(args) (body)}
+    # }}}
+
+    # {{{ def
+    defop 0 "def" $static:['static'] symbol $args:funcargs ":" $body:block
+                  
+        macro name args body static=None:
+            assert name isa logix.Symbol
+
+            tests = std.preconditionTests (str name) args
+            body2 = tests + list body
+            thedef = D{base:def args=(args) body=(body2) (name)}
+            if static:
+                `do:
+                     \thedef
+                     \name = staticmethod \name
+            else:
+                thedef
+    # }}}
+    # }}}
+
+    # {{{ partial operators
+    # Some experimental stuff - infix operators that support partial application
+
+    defop 10 "makepartialop" term $binding:term $fn:[expr]
+        macro opx binding fn=None:
+            op = logix.eval opx
+            f = fn or `{lx rx | \D{(op) lx rx} }
+            tok = D{syntax:" (op.name)}                       #"
+            `defop \binding [expr] \tok [expr]
+                macro lx rx:
+                    if not lx and not rx:
+                        `\\f          # why not just \f ?
+                    elif not lx:
+                        opx = D{(\opx) it (rx)}
+                        `{ \opx}
+                    elif not rx:
+                        opx = D{(\opx) (lx) it}
+                        `{ \opx}
+                    else:
+                        D{(\opx) (lx) (rx)}
+
+    import operator
+    makepartialop ~"base:+" 60 operator.add
+    makepartialop ~"base:*" 65 operator.mul
+    # }}}
+
+    # {{{ forany forall
+    defop 20 expr "forany" expr "in" expr
+        macro testx elemx listx:
+            gensyms res
+            `do:
+                 for \elemx in \listx:
+                     if \testx:
+                         \res = True
+                         break
+                 else:
+                     \res = False
+                 \res
+
+    defop 20 expr "forall" expr "in" expr
+        macro testx elemx listx:
+            gensyms res
+            `do:
+                 for \elemx in \listx:
+                     if not \testx:
+                         \res = False
+                         break
+                 else:
+                     \res = True
+                 \res
+    # }}}
+
+    # {{{ listfor listwhile valfor breakwith
+    
+    # {{{ defop 0 "listfor" $placex:expr "in" $listx:expr $filtx:["if" expr]
+    defop 0 "listfor" $placex:expr "in" $listx:expr $filtx:["if" expr]
+                      ":" $body:block
+        macro placex listx body filtx=None:
+            gensyms res
+
+            loopbody = if filtx: `if \filtx: \res .append do: \*body
+                       else:     `\res .append do: \*body
+
+            `do:
+                 \res = []
+                 for \placex in \listx:
+                     \loopbody
+                 \res
+    # }}}
+
+    # {{{ defop 0 "listwhile" $testx:expr ":" $body:block
+    defop 0 "listwhile" $testx:expr ":" $body:block
+        macro testx body:
+            gensyms res
+            `do:
+                 \res = []
+                 while \testx:
+                     \res .append do: \*body
+                 \res
+    # }}}
+
+    defop 0 "valfor" $placex:expr "in" $listx:expr
+                     ":" $body:block
+                     [eol]/- "else:" $else_:block
+                     
+        macro placex listx body else_ __context__:
+            gensyms res
+            __context__/breakwithVar = res
+            `do:
+                 for \placex in \listx:
+                     \*body
+                 else:
+                     \res = do: \*else_
+                 \res
+
+    defop 0 "breakwith" expr macro x __context__:
+        resultVar = __context__.get "breakwithVar"
+        if resultVar == None:
+            raise SyntaxError, "breakwith can only appear inside a valfor"
+        `do:
+             \resultVar = \x
+             break
+    # }}}
+    
+    # {{{ pipes .> *> ?> 
+    # {{{ defop 90 expr "*>" expr
+    defop 90 expr "*>" expr
+        macro listx funcx:
+            gensyms var
+            `do:
+                 \var = \listx
+                 map \funcx \var
+    # }}}
+
+    # {{{ defop 90 expr ".>" expr
+    defop 90 expr ".>" expr
+        macro argx funcx:
+            gensyms var
+            `do:
+                 \var = \argx
+                 \funcx \var
+    # }}}
+
+    # {{{ defop 90 expr "?>" expr
+    defop 90 expr "?>" expr
+        macro listx funcx:
+            gensyms var
+            `do:
+                 \var = \listx
+                 filter \funcx \var
+    # }}}
+    # }}}
+
+    # {{{ defop 35 expr "=~" "/" freetext "/" $ignorecase:["i"]
+    defop 35 expr "=~" "/" freetext /[^\/\\]*(?:\\.[^\/\\]*)*/ "/" $ignorecase:["i"]
+        func s pattern ignorecase=False:
+            flags = if ignorecase: re.IGNORECASE else: 0
+            re.search pattern s flags
+    # }}}
+
+    # {{{ defop 0 "do" $timed:["timed"] ":" $body:block
+    defop 0 "do" $timed:["timed" [expr]] ":" $body:block
+        macro body **kw:
+            if kw.has_key 'timed':
+                msg = if kw/timed:
+                          `\(kw/timed) + " "
+                      else:
+                          `""
+                gensyms now time res
+                setlang base # avoid infinite recusion (expansion uses base:do)
+                `do:
+                    \now = \@.time.time()
+                    \res = do: \*body
+                    print "%sblock time: %f" % (\msg, \@.time.time() - \now)
+                    \res
+            else:
+                (:base `do: \*body)
+    # }}}
+
+    defop 6 expr ",*" expr (",*" expr)* func *args: zip *:args
+
+    # {{{ defop 0 "noreload" symbol "=" expr macro name valx:
+    defop 0 "noreload" symbol "=" expr macro name valx:
+        `do:
+            \name = \valx
+            __noreload__.append \(str name)
+    # }}}
+
+    # {{{ Interpolated strings
+    def stringInterpExpr parts:
+        res = ''
+        vals = []
+        for part in parts:
+            if part isa str:
+                # use eval to handle \n etc
+                res += eval ('"%s"' % part.replace '"' '\\"') .replace '%' '%%'
+            else:
+                res += "%s"
+                vals.append part
+        if len vals == 0:
+            res.replace "%%" "%"
+        else:
+            `\res % \D{base:, (*vals)}
+        
+
+    defop 0 '"' optext interpolatelang /"/    #"
+        macro *parts:
+            std.stringInterpExpr parts
+
+            
+    defop 0 '"""|' $:(optext interpolatelang /$/)
+                   ($:("|" optext interpolatelang /$/))* ['"'<>]/-
+        macro *lines:
+            parts = []
+            for i, line in enumerate lines:
+                parts.extend line
+                if i != len lines - 1:
+                    parts.append r"\n"
+            std.stringInterpExpr parts
+    # }}}
+
+    # {{{ defop 1 expr "where:" $body:block macro ex body:
+    defop 1 expr "where:" $body:block macro ex body:
+        `do:
+            \*body
+            \ex
+    # }}}
+
+    # {{{ defop 0 "case" expr "of:" $cases:block:(expr ":" $body:block)
+    defop 0 "case" expr "of:" $cases:block:( ("default" ":" | expr ":") $body:block)
+        macro valx cases:
+            regularCases = cases ?> {it.contentLen() == 1}
+            defaultCase = cases ?> {it.contentLen() == 0}
+            if len defaultCase > 1:
+                raise SyntaxError, "multiple defaults in case statement"
+            gensyms val
+            `do:
+                 \val = \valx
+                 \(D{base:if tests=([D[test=(`\val == \case/0) body=(case/body)]
+                                     for case in regularCases])}
+                    + if len defaultCase == 1:
+                          D[else_=(defaultCase/0/body)]
+                      else:
+                          D[]
+                      )
+    # }}}
+
+    # {{{ Exceptions
+    # Redefine try so the ':' is part of the token
+    defop 0 "try:" $body:block 
+                   ( $excepts:( [eol]/- "except"
+                                [ $exc:expr [ "," $target:expr ]/- ]/-
+                                ":" $handler:block )+
+                     $else:[ [eol]/- "else:" block ]
+                   | [eol]/- "finally:" $finally:block )
+        macro *args **kw:
+            D{base:try (*args) (*kw)}
+
+    defop 0 "try" expr $else:["else" $err:symbol ":" $body:block]
+        macro ex **kw:
+            else_ = kw.get 'else'
+            gensyms val
+            ret = if else_:
+                      `do:
+                           \else_/err = \val
+                           \*else_/body
+                  else:
+                      `return \val
+            `do:
+                 \val = \ex
+                 if \val isdoc ~s:error:
+                     \ret
+                 else:
+                     \val
+    defop 0 "error" freetoken /[a-zA-Z0-9-]+/ term*
+        macro sym *args:
+            `return D{s:error (`\\sym) (*[\*args])}
+    # }}}
+        
+        
+                               
+# }}}
+
+# {{{ deflang argPreconditions(std):
+deflang argPreconditions(std):
+
+    defop 50 expr "?" func precon:
+        setlang base
+        def test(x):
+            if x is None:
+                return True
+            else:
+                if isinstance(precon, type):
+                    return isinstance(x, precon)
+                else:
+                    return precon(x)
+        return test
+# }}}
+
+

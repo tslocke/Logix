@@ -1,0 +1,1125 @@
+# {{{ GPL License
+# Logix - an extensible programming language for Python
+# Copyright (C) 2004 Tom Locke
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# (http://www.gnu.org/copyleft/gpl.html)
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# }}}
+# {{{ init
+setlang logix.stdlang
+
+import re
+import itertools
+import new
+
+try:
+    from livedesk.util import debugmode, debug
+except ImportError:
+    def debugmode x:
+
+limport ltest.testlang
+setlang testlang.testlang
+
+from devlogix.util import concat
+
+import devlogix.parser as parser
+# }}}
+
+defsuite main:
+
+    debugmode 0
+
+    def any val: True
+    def oneof *vals: {it in vals}
+
+    # {{{ baseLangExpects = expect par:
+    baseLangExpects = expect par:
+        getTokenMacro any -> None *
+        matchToken any any -> None *
+        getOp any -> None *
+        hasop any -> False *
+    # }}}
+
+    # {{{ def stringTokenizer s lang:
+    def stringTokenizer s lang:
+        import StringIO
+        toks = parser.Tokenizer()
+        toks.setInput (StringIO.StringIO s) '<string>'
+        toks.startLanguage lang
+        toks.startBlock()
+        toks
+    # }}}
+    
+    # {{{ defgroup Tokenizer:
+    defgroup Tokenizer:
+
+        # {{{ class MockLanguage:
+        class MockLanguage:
+            import re
+            regex = re.compile "\+|\-|\:|\="
+
+            def matchToken self str col:
+                return self.regex.match str col
+
+            name = "MOCK LANGUAGE"
+        # }}}
+                
+        # {{{ def tokp s val=None:
+        def tokp s val=None:
+            if val is None:
+                {:parser.Token text=s}
+            else:
+                {:parser.Token text=s value=val}
+        # }}}
+
+        def eolp: {:parser.LayoutToken text='EOL'}
+        def eobp: {:parser.LayoutToken text='EOB'}
+
+        # {{{ deftest simpleTokens:
+        deftest simpleTokens:
+            toks = stringTokenizer "a b c 1 1.2 #foo" MockLanguage()
+            for t in [tokp 'a' 'symbol',
+                      {:parser.Token text='b'},
+                      tokp 'c',
+                      tokp '1' 'number',
+                      tokp '1.2' 'number',
+                      eobp(),
+                      {:parser.LayoutToken text='EOF'}
+                      ] :
+                toks.consumeToken() ?? t
+        # }}}
+
+        # {{{ deftest customTokens:
+        deftest customTokens:
+            toks = stringTokenizer "a=foo+baa-2:4" MockLanguage()
+            for t in [tokp 'a' 'symbol',
+                      tokp '=',
+                      tokp 'foo',
+                      tokp '+',
+                      tokp 'baa',
+                      tokp '-',
+                      tokp '2',
+                      tokp ':',
+                      tokp '4'
+                      ]:
+                          
+                toks.consumeToken() ?? t
+        # }}}
+
+        # {{{ deftest simpleMarks:
+        deftest simpleMarks:
+            toks = stringTokenizer "a b c d e f" MockLanguage()
+            consume = toks.consumeToken
+
+            toks.setMark()
+            consume() ?? tokp "a"
+            toks.backToMark()
+            consume() ?? tokp "a"
+            consume() ?? tokp "b"
+            toks.backToMark()
+            consume() ?? tokp "a"
+            consume() ?? tokp "b"
+            toks.setMark()
+            consume() ?? tokp "c"
+            consume() ?? tokp "d"
+            toks.backToMark()
+            consume() ?? tokp "c"
+            consume() ?? tokp "d"
+            toks.clearMark()
+            toks.backToMark()
+            consume() ?? tokp "a"
+            consume() ?? tokp "b"
+        # }}}
+
+        # {{{ deftest layout:
+        deftest layout:
+
+            # {{{ def tokensAsString s:
+            def tokensAsString s markat=None:
+                
+                t = stringTokenizer s MockLanguage()
+
+                if markat is not None:
+                    for _ in range markat:
+                        tok = t.consumeToken()
+                        if tok.text == ":":
+                            t.startBlock()
+                    t.setMark()
+                    t.consumeToken()
+                    t.backToMark()
+                
+                ' '.join listwhile 1:
+                    tok = t.consumeToken()
+                    if tok isa Exception: raise tok
+                    if tok is t.endOfFile:
+                        break
+                    if tok.text == ":":
+                        t.startBlock()
+                    tok.text
+            # }}}
+
+            def check instr outstr:
+                tokensAsString instr ?= outstr
+
+                strs = outstr.split()
+                for i in range (len strs):
+                    tokensAsString instr i ?= ' '.join strs/[i:]
+                
+            check """
+                a
+                b
+                c
+            """
+                "a EOL b EOL c EOB"
+
+            check """
+                11
+                c d
+            """
+                "11 EOL c d EOB"
+
+            check """
+                11
+            # comment lines don't count
+                c d
+            """
+                "11 EOL c d EOB"
+
+            check "a b: c d: e f" "a b : c d : e f EOB EOB EOB"
+
+            check """
+            a b:
+              c d
+              e f
+            """
+                "a b : c d EOL e f EOB EOB"
+
+            check """
+            a:
+              b
+
+            c:
+              d
+            """
+                "a : b EOB EOL c : d EOB EOB"
+
+            check """
+                a b:
+                 c d
+                 e f
+                g h"""
+                "a b : c d EOL e f EOB EOL g h EOB"
+
+            check """
+                a b:
+                    c d
+                    e f
+                  g h
+                i
+            """
+                "a b : c d EOL e f EOB g h EOL i EOB"
+
+            check """
+                a b:
+                 c d:
+                   e f
+                g h
+            """
+                "a b : c d : e f EOB EOB EOL g h EOB"
+
+            check """
+                a b: c d
+                e f
+            """
+                "a b : c d EOB EOL e f EOB"
+
+            check """
+                a b: c d
+                  e f
+                g h
+            """
+                "a b : c d EOB e f EOL g h EOB"
+
+            check """
+                if x:
+                    p 1
+                    p 2
+                  elif y:
+                    p 3
+            """
+                "if x : p 1 EOL p 2 EOB elif y : p 3 EOB EOB"
+
+            check "while a: print while b: print x"
+                'while a : print while b : print x EOB EOB EOB'
+
+
+            nestedwhile = 'while a : p while b : p 1 EOL p 2 EOB EOL p 3 EOB EOB'
+            check """
+            while a:
+              p while b:
+                p 1
+                p 2
+              p 3
+            """ nestedwhile
+
+            check """
+            while a: p while b: p 1
+                                p 2
+                     p 3
+            """ nestedwhile
+
+            check """
+            while a: p while b: p 1
+                         x y
+                     p 3
+            """
+                'while a : p while b : p 1 EOB x y EOL p 3 EOB EOB'
+
+            check """
+                for x in l:
+                  if foo: break
+                   x
+                 y
+                print x
+                """
+                "for x in l : if foo : break EOB x EOB y EOL print x EOB"
+
+
+            check """
+                if foo:
+                    baa
+                 else:
+                    argh
+                """ 'if foo : baa EOB else : argh EOB EOB'
+            
+            check """
+                if foo: baa
+                  else: argh
+                next
+                """  'if foo : baa EOB else : argh EOB EOL next EOB'
+
+            check """
+                if foo: baa
+                        baa2
+                        baa3
+                  else: argh
+                next
+                """ ('if foo : baa EOL baa2 EOL baa3 EOB else : argh EOB EOL ' + 
+                     'next EOB')
+
+            check """
+                if: f a b:  print 1
+                    g a b:  print 2
+                            print foo
+                    a is b: print 3
+                next
+                """ ('if : f a b : print 1 EOB EOL '+ 
+                     'g a b : print 2 EOL print foo EOB EOL ' + 
+                     'a is b : print 3 EOB EOB EOL next EOB')
+        # }}}
+
+        # {{{ deftest tokenspace:
+        deftest tokenspace:
+            toks = stringTokenizer "a b c\nd e f" MockLanguage()
+            for t in [1..7] *> {toks.consumeToken()}
+                            ?> {not it isa parser.LayoutToken}:
+                t.leftSpace?
+                t.rightSpace?
+                not t.packed?
+
+            toks = stringTokenizer "f 1+2" MockLanguage()
+            f = toks.consumeToken()
+            one = toks.consumeToken()
+            plus = toks.consumeToken()
+            two = toks.consumeToken()
+            
+            f ?? {:parser.Token leftSpace=True rightSpace=True packed=False}
+            one ?? {:parser.Token leftSpace=True rightSpace=False packed=True}
+            plus ?? {:parser.Token leftSpace=False rightSpace=False packed=True}
+            two ?? {:parser.Token leftSpace=False rightSpace=True packed=True}
+        # }}}
+
+        # {{{ deftest freetext:
+        defgroup freetext:
+            reg = re.compile
+            
+            deftest basic:
+                toks = stringTokenizer "abc\\'def'" MockLanguage()
+                toks.freetext (reg r"[^'\\]*(?:\\.[^'\\]*)*")
+                    ?= "abc\\'def"
+                
+            deftest until:
+                toks = stringTokenizer """
+                    two tokens --then a whole load
+                  of free! text" up to "
+                    xyz
+                    """ MockLanguage()
+                toks.consumeToken()
+                toks.consumeToken()
+                toks.freetextUntil (reg "xyz")
+                    ?= """ --then a whole load
+                  of free! text" up to "
+                    """
+
+            deftest keepTerminator:
+                toks = stringTokenizer "a b x y" MockLanguage()
+                toks.freetextUntil (reg "x")
+                toks.nextToken().text ?= 'y'
+
+                toks = stringTokenizer "a b x y" MockLanguage()
+                toks.freetextUntil (reg "(x)")
+                toks.nextToken().text ?= 'x'
+        # }}}
+
+        # {{{ deftest getBlockText:
+        deftest getBlockText:
+            def tokenizer str: stringTokenizer str MockLanguage()
+            toks = tokenizer """
+                a b
+                  c
+                   d
+                  e
+                 f
+                """
+
+            toks.consumeToken()
+            toks.consumeToken()
+            toks.startBlock()
+            toks.getBlockText() ?= """
+                  c
+                   d
+                  e\n"""/[1:]
+
+            toks.consumeToken() ?? tokp 'c'
+        # }}}
+    # }}}
+
+    # {{{ deftest operatorArgs:
+    deftest operatorArgs:
+        flist = parser.flist
+        def opa x:
+            parser.operatorArgs x
+        
+        opa ('a', 1) ?= flist a=1
+        opa 1 ?= flist [1]
+        opa [1,2,3, ('a', 10)] ?= flist 1 2 3 a=10
+        opa ('a', [1,2,3]) ?= flist a=(flist 1 2 3)
+    # }}}
+        
+    # {{{ defgroup parseRules:
+    defgroup parseRules:
+
+        def trueTerminator op=None pb=None: True
+
+        # {{{ def testrule rule lang src:
+        def testrule rule lang src:
+            toks = stringTokenizer src lang
+            final = toks.finalTerminator
+            def terminator op=None pb=None:
+                final op or toks.nextToken() isa parser.LayoutToken
+
+            try:
+                res = rule.parse toks terminator None
+                return if res == parser.failed:
+                           toks.furthestError
+                       else:
+                           res
+                
+            except parser.ParseError, e:
+                return e
+        # }}}
+
+        # {{{ class DummyOp(object):
+        class DummyOp(object):
+            def __getitem__ self key:
+                self.__operands__/[key]
+        # }}}
+
+        # {{{ def makeop token binding lrule rrule assoc='left':
+        def makeop token binding lrule rrule assoc='left' smartspace=None:
+            """make a new operator class"""
+            syn = parser.OperatorSyntax token binding (lrule, rrule)
+                                        assoc=assoc smartspace=smartspace
+            new.classobj ("Op[%s]" % token) (DummyOp,) ['__syntax__':syn]
+        # }}}
+
+        # {{{ mock languages
+        def tokenMatcher toks:
+            toks.sort {a b| len b - len a}
+            regex = re.compile ('|'.join (toks *> re.escape))
+            def match str i:
+                m = regex.match str i
+                if m and m.start() == m.end(): None else: m
+            match
+
+        def makelang ops con:
+            """make a mock language that recognizes all of \ops with
+            \con as the continuation operator"""
+            if con:
+                con.__syntax__.assoc = 'right'
+            
+            operators = [op.__syntax__.token:op for op in ops]
+            ruletokens = concat [if op.__syntax__.rightRule:
+                                     op.__syntax__.rightRule.allLiterals()
+                                 else:
+                                     []
+                                 for op in ops]
+            tokens = if con:
+                         operators.keys() + ruletokens
+                             + con.__syntax__.rightRule.allLiterals()
+                     else:
+                         operators.keys() + ruletokens
+
+            defmob mockLangImlp par:
+                name -> "[[unit test language]]" *
+                operators -> [:] *
+                matchToken any any -> tokenMatcher tokens *
+                getOp any -> {operators.get it}*
+                getContinuationOp() -> con *
+                toplevelblock -> None *
+                baseLangExpects
+                blockCache any any -> None
+                setBlockCache any any any -> None
+
+            defmob mockLang __impl__ -> mockLangImlp *
+            for op in ops:
+                op.__language__ = mockLang
+            if con:
+                con.__language__ = mockLang
+
+            mockLangImlp
+
+        def oplang *ops:
+            makelang ops None
+
+        def conlang *ops:
+            makelang ops/[:-1] ops/[-1]
+
+        def userlang lang:
+            defmob mockUserLang(parser.Language) __impl__ -> lang *
+            mockUserLang
+        # }}}
+        
+        emptylang = oplang()
+
+        # {{{ def oppatt op *args:
+        def oppatt op *args:
+            subpatts = [if a isa tuple: oppatt *:a else: a for a in args]
+            {:op /*=subpatts}
+        # }}}
+
+        # {{{ rules and ops
+        expr   = parser.ExpressionRule()
+        term   = parser.TermRule()
+        symbol = parser.SymbolRule()
+
+        Seq    = parser.SequenceRule
+        Lit    = parser.LiteralRule
+        Triv   = parser.TrivialRule
+
+        Opt = parser.Opt
+        Rep = parser.Rep
+        Choice = parser.ChoiceRule
+
+        prnt = makeop "print" 50 None expr
+        dollar = makeop "$" 110 None expr
+        plus = makeop "+" 50 expr expr
+        # }}}
+
+        # {{{ defgroup TermRule:
+        defgroup TermRule:
+
+            def testterm lang src:
+                return testrule term lang src                    
+
+            # {{{ defgroup simples:
+            defgroup simples:
+
+                deftest single:
+                    testterm emptylang "1" ?= 1
+                    testterm emptylang "a" ?= ~a
+
+                deftest empty:
+                    testterm emptylang "" ?? {:parser.ParseError
+                                              & str it =~ /expected term/}
+            # }}}
+                
+            # {{{ deftest infix:
+            deftest infix:
+                lang = oplang plus
+                testterm lang "a + b" ?? oppatt plus ~a ~b
+                testterm lang "a + b + c" ?? oppatt plus (plus, ~a, ~b) ~c
+            # }}}
+            
+            # {{{ deftest prefix:
+            deftest prefix:
+                lang = oplang prnt dollar
+
+                testterm lang "$ a" ?? oppatt dollar ~a
+                testterm lang "print $ a" ??  oppatt prnt (dollar, ~a)
+                testterm lang "$ print a" ??  oppatt dollar (prnt, ~a)
+            # }}}
+            
+            # {{{ deftest postfix:
+            deftest postfix:
+                incop = makeop "++" 50 expr None
+                lang = oplang incop
+
+                testterm lang "a ++" ?? oppatt incop ~a
+                
+                testterm lang "a ++ ++" ?? oppatt incop (incop, ~a)
+            # }}}
+
+            # {{{ deftest binding:
+            deftest binding:
+                times = makeop "*" 60 expr expr
+
+                lang = oplang plus times
+                            
+                testterm lang "a + b * c" ?? oppatt plus ~a (times, ~b, ~c)
+            # }}}
+
+            # {{{ deftest assoc:
+            deftest assoc:
+                lang = oplang plus
+                testterm lang "a + b + c" ?? oppatt plus (plus, ~a , ~b) ~c
+                plus.__syntax__.assoc = 'right'
+                testterm lang "a + b + c" ?? oppatt plus ~a (plus, ~b, ~c)
+            # }}}
+
+            # {{{ deftest language:
+            deftest language:
+                sublang = oplang plus
+                usublang = userlang sublang
+
+                # the unrecognized '+' should terminate the parse
+                testrule expr emptylang "1 + 2" ?= 1
+
+                rule = parser.TermRule usublang
+                testrule rule emptylang "1+2" ??
+                    oppatt plus 1 2
+
+
+                defmob tokens par:
+                    currentLanguage() -> emptylang *
+                    lineno -> 1 *
+                    nextToken() -> None *
+                    seq:
+                        startLanguage sublang -> None
+                        setError any -> None
+                        endLanguage() -> None
+
+                parser.TermRule usublang .parse tokens
+                                                trueTerminator
+                                                None
+                testlang.confirmdone(tokens)
+            # }}}
+        # }}}
+        
+        # {{{ defgroup ExpressionRule:
+        defgroup ExpressionRule:
+
+            def testexpr lang src: testrule expr lang src
+
+            con = makeop "CON" 100 expr term
+
+            def exprlang *ops:
+                conlang *:(ops + (con,))
+
+            # {{{ deftest simple:
+            deftest simple:
+                testexpr exprlang() "a b" ?? oppatt con ~a ~b
+            # }}}
+
+            # {{{ deftest withInfix:
+            deftest withInfix:
+                lang = exprlang plus
+
+                testexpr lang "a + b" ?? oppatt plus ~a ~b
+                testexpr lang "a + b + c" ?? oppatt plus (plus, ~a, ~b) ~c
+                testexpr lang "a b + c d" ?? oppatt plus (con, ~a, ~b)
+                                                         (con, ~c, ~d)
+
+                testexpr lang "a b + c d + e f" ??
+                    oppatt plus (plus, (con, ~a, ~b), (con, ~c, ~d)) (con, ~e, ~f)
+            # }}}
+
+            # {{{ deftest withPrefix:
+            deftest withPrefix:
+                lang = exprlang dollar prnt
+                # dollar binds tighter than con
+
+                testexpr lang "$a" ?? oppatt dollar ~a
+                testexpr lang "$a b" ?? oppatt con (dollar, ~a) ~b
+                testexpr lang "print a b" ?? oppatt prnt (con, ~a, ~b)
+                testexpr lang "print $a b" ?? oppatt prnt (con, (dollar, ~a), ~b)
+                testexpr lang "print a $b" ?? oppatt prnt (con, ~a, (dollar, ~b))
+                testexpr lang "f print g b" ?? oppatt con ~f (prnt, (con, ~g, ~b))
+            # }}}
+
+            # {{{ deftest withPostfix:
+            deftest withPostfix:
+                inc = makeop "++" 50 expr None
+                lang = exprlang inc
+
+                testexpr lang "a++" ?? oppatt inc ~a
+                testexpr lang "a b++" ?? oppatt inc (con, ~a, ~b)
+                testexpr lang "a++ b" ?? oppatt con (inc, ~a) ~b
+            # }}}
+
+            defgroup continuation:
+
+                # {{{ deftest haskellStyle:
+                deftest haskellStyle:
+                    con = makeop "CON" 100 expr (Rep term)
+                    lang = conlang plus dollar prnt con
+                    
+                    testexpr lang "f a b" ?? oppatt con ~f ~a ~b
+                    testexpr lang "f a b + g 1"
+                        ?? oppatt plus (con, ~f, ~a, ~b) (con, ~g, 1)
+
+                    testexpr lang "f a print g b"
+                        ?? oppatt con ~f ~a (prnt, (con, ~g, ~b))
+                # }}}
+
+                # {{{ deftest pythonStyle:
+                deftest pythonStyle:
+                    con = makeop "CON" 100 expr (Rep (Choice (Seq (Lit "(")
+                                                                  expr
+                                                                  (Lit ")"))
+                                                             (Seq (Lit "[")
+                                                                  expr
+                                                                  (Lit "]"))))
+                    lang = conlang plus dollar prnt con
+                    
+                    testexpr lang "f" ?= ~f
+                    testexpr lang "f(1)" ?? oppatt con ~f 1
+                    testexpr lang "f(1)[2][1]" ?? oppatt con ~f 1 2 1
+                    testexpr lang "f(1)[2] + g(x)" ?? oppatt plus (con, ~f, 1, 2)
+                                                                  (con, ~g, ~x)
+                # }}}
+        # }}}
+
+        # {{{ defgroup blockrule:
+        defgroup blockrule:
+
+            block = parser.BlockRule()
+
+            def testblock lang src: testrule block lang src
+            
+            def blockpatt *args:
+                {:list /*=args}
+
+            # {{{ deftest basic:
+            deftest basic:
+                testblock emptylang """
+                    a
+                    b
+                    c""" ?? blockpatt ~a ~b ~c
+            # }}}
+
+            # {{{ deftest language:
+            deftest language:
+                locallang = oplang plus
+                blockrule = parser.BlockRule language=(userlang locallang)
+                testrule blockrule emptylang "a + b" ??
+                    blockpatt (oppatt plus ~a ~b)
+
+                defmob tokens seq:
+                    currentLanguage() -> emptylang
+                    startLanguage locallang -> None
+                    par:
+                        currentLanguage() -> locallang *
+                        lineno -> 1 *
+                        nextToken() -> None *
+                        seq:
+                            startBlock() -> parser.Tokenizer.SAME_LINE_BLOCK
+                            setError any -> None
+                            cancelBlock() -> None
+                            endLanguage() -> None
+
+                blockrule.parse tokens trueTerminator None
+                testlang.confirmdone(tokens)
+            # }}}
+
+            # {{{ deftest blockterminators:
+            deftest blockterminators:
+                term = parser.TermRule()
+                con = makeop "CON" 100 expr term
+                lang = conlang con
+
+                def test src sameline:
+                    toks = stringTokenizer src lang
+                    def terminator op=None pb=None:
+                        toks.nextToken().text == "X"
+                    if sameline:
+                        toks.consumeToken() # this makes it a SAME_LINE_BLOCK
+                                            # becuase the block doesn't start
+                                            # at the start of the line
+                    block.parse toks terminator None
+
+                # the X should terminate the block
+                test "a b X" True ?? blockpatt ~b
+
+                # now it shouldn't
+                test """
+                   a b
+                     c X
+                     """ True
+                     ?? blockpatt ~b (oppatt con ~c ~X)
+
+                # NEXT_LINE_BLOCK - shouldn't terminate
+                test "a X" False ?? blockpatt (oppatt con ~a ~X)
+            # }}}
+        # }}}
+
+        # {{{ defgroup LiteralRule:
+        defgroup LiteralRule:
+
+            lit = parser.LiteralRule
+
+            deftest simple:
+                t = parser.Token ':'
+                defmob tokens seq:
+                    nextToken() -> t
+                    consumeToken() -> t
+                lit ":" .parse tokens None None ?= ':'
+
+                errorMessage = []
+                defmob tokens seq:
+                    nextToken() -> t
+                    setError any -> {errorMessage.append it}
+                    consumeToken() -> t
+                lit "*" .parse tokens None None ?= parser.failed
+                errorMessage ?= ['expected "*"']
+
+            deftest eol:
+                #makesure we don't clash with LayoutTokens
+                errorMessage = []
+                defmob tokens seq:
+                    nextToken() -> parser.Tokenizer.endOfLine
+                    setError any -> {errorMessage.append it}
+                    consumeToken() -> parser.Tokenizer.endOfLine
+                lit "EOL" .parse tokens None None ?= parser.failed
+                errorMessage ?= ['expected "EOL"']
+        # }}}
+
+        # {{{ defgroup TokenRule:
+        defgroup TokenRule:
+
+            token = parser.TokenRule()
+
+            def testtoken lang src: testrule token lang src
+
+            deftest simple:
+                testtoken emptylang "a" ?= ~a
+                testtoken emptylang "1" ?= 1
+
+            deftest op:
+                lang = oplang plus
+                testtoken lang "+" ?= plus
+                testtoken lang "~" ?? {:parser.ParseError}
+                
+            deftest language:
+                lang = oplang plus
+                locallang = oplang dollar
+                ulocallang = userlang locallang
+
+                testrule (parser.TokenRule ulocallang) lang "+"
+                    ?? {:parser.ParseError}
+                testrule (parser.TokenRule ulocallang) lang "$" ?= dollar
+        # }}}
+
+        # {{{ defgroup SymbolRule:
+        defgroup SymbolRule:
+
+            symbol = parser.SymbolRule()
+            def testname src: testrule symbol emptylang
+
+            deftest simple:
+                defmob tokens seq:
+                    nextToken() -> parser.Token 'foo' 'symbol'
+                    consumeToken() -> parser.Token 'foo' 'symbol'
+                symbol.parse tokens {op=None|False} None ?= ~foo
+
+            deftest withTokenizer:
+                testrule symbol emptylang "baa" ?= ~baa
+        # }}}
+
+        # {{{ defgroup SequenceRule:
+        defgroup SequenceRule:
+
+            tok = parser.TokenRule()
+
+            # {{{ deftest simple:
+            deftest simple:
+                testrule (Seq (Lit 'a') (Lit 'b') (Lit 'c')) emptylang "a b c"
+                    ?= []
+                
+                testrule (Seq (Lit 'a') tok (Lit 'c')) emptylang "a b c"
+                    ?= ~b
+                
+                testrule (Seq (Lit 'a') tok tok (Lit 'c')) emptylang "a b 1 c"
+                    ?= [~b, 1]
+            # }}}
+
+            # {{{ deftest errors:
+            defgroup errors:
+                lang = oplang plus
+
+                deftest basics:
+                    rule = Seq (Opt expr) (Lit 'X')
+                    testrule rule lang "X" ?= parser.nothing
+                    testrule rule lang "1+2 X" ?? {:plus 1 2}
+                    testrule rule lang "1+ X"
+                        ?? {:parser.ParseError msg=/expected expression/}
+
+                    rule = Seq (Opt (Seq (Lit 'A') (Opt expr))) (Lit 'X')
+                    testrule rule lang "A 1+ X"
+                        ?? {:parser.ParseError msg=/expected expression/}
+
+                    rule = Seq (Opt expr) (Choice (Lit 'X') (Lit 'Y'))
+                    testrule rule lang "1+ Y"
+                        ?? {:parser.ParseError msg=/expected expression/}
+
+                    rule = Seq (Opt expr) (Rep (Lit 'A')) (Lit 'X')
+                    testrule rule lang "1+ X"
+                        ?? {:parser.ParseError msg=/expected expression/}
+
+                    rule = Seq (Rep (Seq expr (Lit 'x'))) (Lit 'X')
+                    testrule rule lang "X" ?= []
+                    testrule rule lang "1 x X" ?= [1]
+                    testrule rule lang "1 x 2 x X" ?= [1,2]
+
+                    testrule rule lang "1+ x X"
+                        ?? {:parser.ParseError msg=/expected expression/}
+
+                    rule = Seq (Opt expr)
+                               (Opt (Lit 'I'))
+                               (Lit 'X')
+                    testrule rule lang "I X" ?= 'I'
+
+                deftest eol:
+                    rule = Seq (Opt expr) (Opt parser.EolRule()) (Lit 'X')
+
+                    testrule rule lang "1 + \nX"
+                        ?? {:parser.ParseError msg=/expected expression/}
+                    testrule rule lang "1 + X"
+                        ?? {:parser.ParseError msg=/expected expression/}
+
+                deftest disableHints:
+                    rule = Seq (Opt symbol)
+                               (Rep term)
+                               (Lit 'X')
+                    testrule rule lang "a X" ?= [~a, []]
+                    testrule rule lang "1 X" ?= [[1]]
+                    
+                    rule = Seq (Opt symbol)
+                               (Choice (Lit 'Y') (Rep term))
+                               (Lit 'X')
+                    testrule rule lang "1 X" ?= [[1]]
+
+                    rule = Seq (Opt (Seq (Lit '.') term))
+                               (Rep term)
+                               (Lit 'X')
+                    testrule rule lang "1 X" ?= [[1]]
+            # }}}
+        # }}}
+
+        # {{{ defgroup ChoiceRule:
+        defgroup ChoiceRule:
+
+            deftest simple:
+                rule = Choice (Lit 'a') (Lit 'b')
+
+                testrule rule emptylang "a" ?= 'a'
+                testrule rule emptylang "b" ?= 'b'
+                testrule rule emptylang "c" ?? {:parser.ParseError}
+
+                rule = Choice (Lit 'a') expr
+                testrule rule emptylang "a" ?= 'a'
+                testrule rule emptylang "1" ?= 1
+        # }}}
+
+        # {{{ defgroup TrivialRule:
+        defgroup TrivialRule:
+
+            deftest simple:
+                testrule (Triv 'a') emptylang "" ?= 'a'
+        # }}}
+
+        # {{{ defgroup FreetextRule:
+        defgroup FreetextRule:
+
+            deftest simple:
+                testrule (parser.FreetextRule 'end' True) emptylang
+                   """what !! a load ` ' ' " of ,.junk!end"""
+                   ?=
+                   """what !! a load ` ' ' " of ,.junk!"""
+
+                testrule (parser.FreetextRule '[^"]*' False) emptylang 'abcdef"'
+                    ?= 'abcdef'
+        # }}}
+
+        # {{{ defgroup EolRule:
+        defgroup EolRule:
+
+            deftest simple:
+                toks = stringTokenizer "a\nb" emptylang
+                toks.consumeToken()
+                parser.EolRule().parse toks emptylang None None
+                    ?= parser.nothing
+
+                testrule parser.EolRule() emptylang "1" ?? {:parser.ParseError}
+        # }}}
+
+        # {{{ defgroup Opt:
+        defgroup Opt:
+
+            deftest simple:
+                rule = Opt expr
+                testrule rule emptylang "1" ?= 1
+                testrule rule emptylang "" ?= parser.nothing
+
+            deftest withLiteral:
+                rule = Opt (Lit 'a')
+                testrule rule emptylang 'a' ?= 'a'
+
+                rule = Opt (Seq (Lit 'a') Triv())
+                testrule rule emptylang 'a' ?= parser.nothing
+        # }}}
+
+        # {{{ defgroup Rep:
+        defgroup Rep:
+
+            deftest simple:
+                rule = parser.Rep term
+                testrule rule emptylang "" ?= []
+                testrule rule emptylang "1" ?= [1]
+                testrule rule emptylang "1 2 3" ?= [1, 2, 3]
+        # }}}
+
+        # {{{ defgroup Rep1:
+        defgroup Rep1:
+
+            deftest simple:
+                rule = parser.Rep1 term
+                testrule rule emptylang "" ?? {:parser.ParseError}
+                testrule rule emptylang "1" ?= [1]
+                testrule rule emptylang "1 2 3" ?= [1, 2, 3]
+        # }}}
+
+        # {{{ defgroup NamedRule:
+        deftest NamedRule:
+
+            def testnamed name src:
+                testrule (parser.NamedRule name term) emptylang src
+
+            testnamed 'x' "1" ?= ('x', 1)
+            testnamed None "1" ?= (None, 1)
+        # }}}
+        
+        # {{{ defgroup syntax:
+        defgroup syntax:
+
+            optExpr = parser.Opt parser.ExpressionRule()
+
+            paren = makeop '(' 0 None (seq expr (lit ')'))
+
+            star = makeop '*' 95 expr expr
+            plus = makeop '+' 90 expr expr
+            eq = makeop '=' 50 expr expr
+
+            dcolon = makeop '::' 105 optExpr expr
+
+            eqeq = makeop '==' 60 expr expr
+            noteq = makeop '!=' 60 expr expr
+        
+            dollar = makeop '$' 110 None optExpr
+            notop = makeop 'not' 80 None expr
+
+            brace = makeop '{' 0 None (seq expr (lit '}'))
+        # }}}
+            
+        # {{{ deftest smartspace:
+        deftest smartspace:
+            plus = makeop "." 50 expr expr
+        # }}}
+
+        # {{{ deftest optext:
+        deftest optext:
+            angle = makeop '<' 0 None (Seq symbol (Lit '>'))
+            plus = makeop '+' 50 expr expr
+            brace = makeop "{" 0 None (Seq expr (Lit "}"))
+            arrow = makeop ">>>" 0 None expr
+            lang = oplang angle plus brace arrow
+
+            rx = re.compile "(?P<TERMINATOR>END)|(<)|({)|(>>>)"
+                          
+            defmob textlang par:
+                like lang
+                optextRegex "END" -> rx *
+
+            defmob utextlang(parser.Language) __impl__ -> textlang
+
+            def test s:
+                testrule (parser.OptextRule "END" utextlang) emptylang s
+
+            test "this is some text END" ?= ["this is some text "]
+
+            test "text with an <operator> inside END" 
+                ?? {:* "text with an " {:angle ~operator} " inside "}
+
+            test "+ doesn't work outside but does {inside + 1}!END"
+                ?? {:* "+ doesn't work outside but does "
+                       {:brace {:plus ~inside 1}}
+                       "!"}
+
+            test """
+                We can use prefix operators like this
+                >>> 1 + 2
+                Cool eh? END
+                """
+                ?? {:* /0=/We can use prefix operators like this/
+                       /1={:arrow {:plus 1 2}}
+                       /2=/Cool eh/}
+
+            test """
+                Line continuation rules still apply
+                >>> 1 + 2
+                      + 3
+                wow... END
+                """
+                ?? {:* /0=/Line continuation/
+                       /1={:arrow {:plus {:plus 1 2} 3}}
+                       /2=/wow/}
+        # }}}
+
+        # {{{ deftest parsedName:
+        deftest parsedName:
+            ParsedName = parser.ParsedNameRule
+            lang = oplang plus
+
+            rule = ParsedName expr
+            testrule rule lang "a 1 + 2" ?? {:* 'a' (oppatt plus 1 2)}
+
+            rule = ParsedName (Seq (Lit 'eq') expr)
+            testrule rule lang "a eq 1 + 2" ?? {:* 'a' (oppatt plus 1 2)}
+
+            rule = Choice (ParsedName expr) expr
+            testrule rule emptylang "a 1" ?= ('a', 1)
+            testrule rule emptylang "1" ?= 1
+        # }}}
+# }}}
